@@ -1,0 +1,11 @@
+# jieya.py 没有第三方 Python 依赖 —— 所有 import 均为标准库:
+#   argparse, os, re, shutil, secrets, subprocess
+#
+# 因此本文件无需 pip 安装任何包,执行
+#   pip install -r requirements.txt
+# 不会安装任何东西
+#
+# 真正的运行依赖在 Python 之外:
+#   1. Python >= 3.6        (secrets 模块自 3.6 引入)
+#   2. 7z.exe / 7z.dll      (脚本同目录,或 PATH,或 C:\Program Files\7-Zip\)
+#   3. UnRAR.exe            (脚本同目录,或 PATH,或 C:\Program Files\WinRAR\)

@@ -1,0 +1,5 @@
+# Files matching any line below (exact filename including extension) are
+# deleted recursively under extract_path after extraction finishes.
+# - One filename per line.
+# - Blank lines and lines starting with '#' are ignored.
+# - Encoding is UTF-8; non-ASCII names (including Chinese) work fine.
