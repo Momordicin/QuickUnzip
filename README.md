@@ -22,3 +22,10 @@ python jieya.py [extract|purge|rename|all]   # (不带参时默认 all)
 
 # 致谢
 感谢[toolUnRar](https://github.com/Mario-Hero/toolUnRar)项目的启发, 免去了python库依赖, 提供了分卷解压问题的解决方案 
+
+This software uses 7-Zip (https://www.7-zip.org/)  
+7-Zip is licensed under the GNU LGPL license.  
+
+由于WinRar软件采用私有许可证，未经授权不得再分发其可执行文件, 且7z基本覆盖其解压功能, 如有需要可以[自行下载](https://www.rarlab.com/download.htm)
+
+感谢你的使用和宝贵建议!
