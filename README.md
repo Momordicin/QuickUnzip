@@ -26,6 +26,7 @@ python jieya.py [extract|purge|rename|all]   # (不带参时默认 all)
 This software uses 7-Zip (https://www.7-zip.org/)  
 7-Zip is licensed under the GNU LGPL license.  
 
-由于WinRar软件采用私有许可证，未经授权不得再分发其可执行文件, 且7z基本覆盖其解压功能, 如有需要可以[自行下载](https://www.rarlab.com/download.htm)
-
-感谢你的使用和宝贵建议!
+This software uses UnRAR (https://www.rarlab.com/rar_add.htm)
+UnRAR is freeware with source code, developed by RARLAB (Alexander Roshal).
+UnRAR may be used freely, but it may NOT be used to develop a RAR 
+(de)compression library or to re-create the RAR compression algorithm.
