@@ -22,3 +22,11 @@ python jieya.py [extract|purge|rename|all]   # (不带参时默认 all)
 
 # 致谢
 感谢[toolUnRar](https://github.com/Mario-Hero/toolUnRar)项目的启发, 免去了python库依赖, 提供了分卷解压问题的解决方案 
+
+This software uses 7-Zip (https://www.7-zip.org/)  
+7-Zip is licensed under the GNU LGPL license.  
+
+This software uses UnRAR (https://www.rarlab.com/rar_add.htm)
+UnRAR is freeware with source code, developed by RARLAB (Alexander Roshal).
+UnRAR may be used freely, but it may NOT be used to develop a RAR 
+(de)compression library or to re-create the RAR compression algorithm.
