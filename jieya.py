@@ -105,6 +105,23 @@ def _find_unrar_exe():
         f"UnRAR.exe not found in {SCRIPT_DIR}, PATH, "
         "or C:\\Program Files\\WinRAR\\UnRAR.exe"
     )
+    
+def _find_bandizip_exe():
+    """按 SCRIPT_DIR → PATH → 默认安装路径 顺序定位 Bandizip.exe,找不到抛错。"""
+    for name in ('Bandizip.exe', 'bandizip.exe'):
+        local = os.path.join(SCRIPT_DIR, name)
+        if os.path.isfile(local):
+            return local
+    found = shutil.which('Bandizip') or shutil.which('bandizip')
+    if found:
+        return found
+    fallback = r'C:\Program Files\Bandizip\Bandizip.exe'
+    if os.path.isfile(fallback):
+        return fallback
+    raise FileNotFoundError(
+        f"Bandizip.exe not found in {SCRIPT_DIR}, PATH, "
+        "or C:\\Program Files\\Bandizip\\Bandizip.exe"
+    )
 
 
 SEVEN_ZIP_EXE = _find_7z_exe()
