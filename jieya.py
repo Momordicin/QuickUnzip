@@ -109,7 +109,7 @@ def _apply_config():
 
 # 正则常量
 SPLIT_VOL_RE = re.compile(r'\.(\d{3})$')                      # .001 / .002 ...
-PART_RAR_RE = re.compile(r'\.part\d+\.rar$', re.IGNORECASE)   # .part1.rar / .part2.rar ...
+PART_RAR_RE = re.compile(r'\.part(\d+)\.rar$', re.IGNORECASE)  # .part1.rar / .part2.rar ...
 NO_PATTERN = re.compile(r'[Nn][Oo]\.(\d+)')                   # 文件夹名中的 No.xxx
 DIGIT_RUN = re.compile(r'\d+')                                # 任一段连续数字
 
@@ -179,23 +179,6 @@ def _find_unrar_exe():
         f"UnRAR.exe not found in {APP_DIR}, PATH, "
         "or C:\\Program Files\\WinRAR\\UnRAR.exe"
     )
-    
-def _find_bandizip_exe():
-    """按 APP_DIR → PATH → 默认安装路径 顺序定位 Bandizip.exe,找不到抛错。"""
-    for name in ('Bandizip.exe', 'bandizip.exe'):
-        local = os.path.join(APP_DIR, name)
-        if os.path.isfile(local):
-            return local
-    found = shutil.which('Bandizip') or shutil.which('bandizip')
-    if found:
-        return found
-    fallback = r'C:\Program Files\Bandizip\Bandizip.exe'
-    if os.path.isfile(fallback):
-        return fallback
-    raise FileNotFoundError(
-        f"Bandizip.exe not found in {APP_DIR}, PATH, "
-        "or C:\\Program Files\\Bandizip\\Bandizip.exe"
-    )
 
 
 SEVEN_ZIP_EXE = None
@@ -230,13 +213,17 @@ def extract_with_7z(file_path, output_path, password):
     blob = (result.stderr or '') + (result.stdout or '')
     if 'Wrong password' in blob or 'Can not open encrypted archive' in blob:
         return 'bad_password'
+    # 缺分卷 / 文件被截断时 7z 报 'Unexpected end of archive',与密码无关;
+    # 分卷 zip 缺卷时还会同时报 CRC Failed,所以必须先于 CRC 判断。
+    if 'Unexpected end of archive' in blob:
+        return 'incomplete'
     if 'CRC' in blob or 'Data error' in blob:
         return 'corrupt'
     return 'fail'
 
 
 def extract_with_unrar(file_path, output_path, password):
-    """调 UnRAR.exe 解压 .rar / .partN.rar。返回 'ok' | 'bad_password' | 'corrupt' | 'fail'。"""
+    """调 UnRAR.exe 解压 .rar / .partN.rar。返回 'ok' | 'bad_password' | 'incomplete' | 'corrupt' | 'fail'。"""
     pw_arg = f'-p{password}' if password else '-p-'
     out = output_path
     # UnRAR 要求输出路径必须以分隔符结尾,否则它会把路径当成单个目标文件名而非目录。
@@ -250,6 +237,12 @@ def extract_with_unrar(file_path, output_path, password):
     )
     if result.returncode == 0:
         return 'ok'
+    # 缺卷时 UnRAR 的退出码与密码错误/无文件可解有重叠,先按输出文本识别。
+    blob = (result.stderr or '') + (result.stdout or '')
+    if any(s in blob for s in ('Cannot find volume',
+                               'start extraction from a previous volume',
+                               'Unexpected end of archive')):
+        return 'incomplete'
     if result.returncode in (10, 11):
         return 'bad_password'
     if result.returncode == 3:
@@ -264,20 +257,69 @@ def _is_rar_file(file_path):
 
 
 REASON_BAD_PASSWORD = '密码错误(密码库中没有匹配的密码)'
+REASON_MISSING_VOLUME = '分卷不全(请把所有分卷放在同一文件夹)'
+REASON_TRUNCATED = '文件不完整(下载未完成或被截断)'
 REASON_CORRUPT = '压缩包损坏(CRC 或数据错误)'
 REASON_UNSUPPORTED = '无法识别的格式或解压失败'
 
 
 class ExtractError(Exception):
-    """解压失败;reason 是用于汇总分组的失败原因(上面的 REASON_* 之一)。"""
+    """解压失败;reason 是用于汇总分组的失败原因(上面的 REASON_* 之一),
+    detail 是附在文件名后的补充说明(如缺了哪几卷),可为 None。"""
 
-    def __init__(self, reason, path):
+    def __init__(self, reason, path, detail=None):
         super().__init__(f"{reason}: {path}")
         self.reason = reason
+        self.detail = detail
+
+
+def _volume_key(path):
+    """分卷文件 → ((去掉卷号的路径, 类型), 卷号, 卷号位数);非分卷返回 None。"""
+    m = PART_RAR_RE.search(path)
+    if m:
+        return (path[:m.start()].lower(), 'part'), int(m.group(1)), len(m.group(1))
+    m = SPLIT_VOL_RE.search(path)
+    if m:
+        return (path[:m.start()].lower(), 'num'), int(m.group(1)), len(m.group(1))
+    return None
+
+
+def _missing_volumes(path):
+    """按同目录下的文件名找出缺失的分卷(第 1 卷到现有最大卷号之间的空缺)。
+
+    返回 (缺失卷名列表, 同组现有卷数)。只能发现"中间"或"第一卷"缺失;
+    最后一卷缺失从文件名上看不出,要靠解压工具报错('incomplete')兜底。
+    """
+    vk = _volume_key(path)
+    if vk is None:
+        return [], 0
+    key, _num, width = vk
+    folder = os.path.dirname(path) or '.'
+    present = set()
+    for name in os.listdir(folder):
+        other = _volume_key(os.path.join(folder, name))
+        if other and other[0] == key:
+            present.add(other[1])
+
+    stem = _archive_stem(os.path.basename(path))
+    if key[1] == 'part':
+        def vol_name(n):
+            return f"{stem}.part{n:0{width}d}.rar"
+    else:
+        def vol_name(n):
+            return f"{stem}.{n:0{width}d}"
+    return [vol_name(n) for n in range(1, max(present) + 1) if n not in present], len(present)
 
 
 def extract_file(file_path, output_path):
     """解压单个压缩包到 output_path:按后缀分派工具、轮询密码,全失败则抛 ExtractError。"""
+    missing, n_present = _missing_volumes(file_path)
+    missing_detail = f"缺少 {', '.join(missing)}" if missing else None
+    # 同组只有这一个文件(如 '资料.666')时,它也可能只是被改了后缀的单个压缩包,
+    # 先照常尝试;多卷且有空缺时才直接判定缺卷。
+    if missing and n_present > 1:
+        raise ExtractError(REASON_MISSING_VOLUME, file_path, missing_detail)
+
     os.makedirs(output_path, exist_ok=True)
     extractor = extract_with_unrar if _is_rar_file(file_path) else extract_with_7z
 
@@ -287,10 +329,18 @@ def extract_file(file_path, output_path):
         status = extractor(file_path, output_path, pw)
         if status == 'ok':
             return
+        # 缺卷/截断与密码无关,换密码也没用,立即停止。
+        if status == 'incomplete':
+            if _volume_key(file_path):
+                raise ExtractError(REASON_MISSING_VOLUME, file_path,
+                                   missing_detail or "可能缺少最后一卷, 或某一卷没下载完整")
+            raise ExtractError(REASON_TRUNCATED, file_path)
         if status == 'corrupt':
             raise ExtractError(REASON_CORRUPT, file_path)
         if status == 'bad_password':
             saw_bad_password = True
+    if missing:
+        raise ExtractError(REASON_MISSING_VOLUME, file_path, missing_detail)
     # 从没报过密码错误 → 大概率根本不是压缩包或格式不支持,而不是密码问题。
     reason = REASON_BAD_PASSWORD if saw_bad_password else REASON_UNSUPPORTED
     raise ExtractError(reason, file_path)
@@ -355,14 +405,15 @@ def _walk_has_abnormal(folder):
 
 
 def _group_split_volumes(file_paths):
-    """把 .001 / .002 / ... 分卷归组,只保留每组的 .001(其余由 7z 自动联动)。"""
+    """把 .001 / .002 ... 与 .part1.rar / .part2.rar ... 分卷归组,每组只保留卷号最小的一卷
+    (其余由 7z / UnRAR 自动联动)。最小卷号不是 1 时照样保留,由 extract_file 报"缺少第一卷"。"""
     grouped = {}
     singles = []
     for fp in file_paths:
-        m = SPLIT_VOL_RE.search(fp)
-        if m:
-            base = SPLIT_VOL_RE.sub('', fp)
-            grouped.setdefault(base, []).append((int(m.group(1)), fp))
+        vk = _volume_key(fp)
+        if vk:
+            key, num, _width = vk
+            grouped.setdefault(key, []).append((num, fp))
         else:
             singles.append(fp)
     result = list(singles)
@@ -445,11 +496,13 @@ class RunResult:
         self.failures += other.failures
 
 
-def _failure_reason(e):
-    """异常 → 用于分组的失败原因文本。"""
+def _describe_failure(e, name):
+    """异常 → (用于分组的失败原因, 带补充说明的显示名)。"""
     if isinstance(e, ExtractError):
-        return e.reason
-    return f'其他错误({type(e).__name__}: {e})'
+        if e.detail:
+            name = f"{name}({e.detail})"
+        return e.reason, name
+    return f'其他错误({type(e).__name__}: {e})', name
 
 
 def process_random_dir(rd, output_dir, last_name, label, result):
@@ -491,9 +544,9 @@ def process_random_dir(rd, output_dir, last_name, label, result):
         try:
             extract_file(item, new_rd)
         except Exception as e:
-            reason = _failure_reason(e)
-            print(f"    内层解压失败: {item_label}: {reason}")
-            result.add_failure(reason, item_label)
+            reason, shown = _describe_failure(e, item_label)
+            print(f"    内层解压失败: {shown}: {reason}")
+            result.add_failure(reason, shown)
             shutil.rmtree(new_rd, ignore_errors=True)
             continue
         # 命名优先级:该层 archive 自身 stem > rd 中最深目录名 > 父级传下来的 last_name。
@@ -536,9 +589,9 @@ def extract_tasks(tasks, output_dir):
             extract_file(task, rd)
             process_random_dir(rd, output_dir, _archive_stem(name), name, result)
         except Exception as e:
-            reason = _failure_reason(e)
-            print(f"    失败: {reason}")
-            result.add_failure(reason, name)
+            reason, shown = _describe_failure(e, name)
+            print(f"    失败: {reason}" + (f" — {e.detail}" if getattr(e, 'detail', None) else ''))
+            result.add_failure(reason, shown)
         finally:
             shutil.rmtree(rd, ignore_errors=True)
 
