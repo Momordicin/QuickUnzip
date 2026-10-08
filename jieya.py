@@ -12,6 +12,7 @@ CLI:
 """
 
 import argparse
+import json
 import os
 import re
 import shutil
@@ -23,12 +24,33 @@ import subprocess
 # 配置与常量
 # ============================================================
 
+# 脚本目录与外部资源路径(便携式 — 工具与配置文件都跟着 jieya.py 走)
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+CONFIG_FILE = os.path.join(SCRIPT_DIR, 'config.json')
+CONFIG_EXAMPLE_FILE = os.path.join(SCRIPT_DIR, 'config.example.json')
+
+
+def _load_config():
+    """读 config.json(本地、不入库);不存在时提示从 config.example.json 复制。"""
+    if not os.path.isfile(CONFIG_FILE):
+        raise SystemExit(
+            f"Config not found: {CONFIG_FILE}\n"
+            f"Copy {CONFIG_EXAMPLE_FILE} to config.json and edit it first.")
+    with open(CONFIG_FILE, encoding='utf-8') as f:
+        return json.load(f)
+
+
+_config = _load_config()
+
 # 路径配置
-file_path = "E:/downloads/test1/tmp/"
-extract_path = "E:/downloads/test1/extracted/"
+file_path = _config['file_path']
+extract_path = _config['extract_path']
 
 # 密码列表(extract_file 会按顺序尝试,末尾再追加 None 表示"无密码兜底")
-PASSWORDS = ['anon', '1234']
+PASSWORDS = list(_config.get('passwords', []))
+
+# 垃圾文件名清单(完整文件名含后缀,解压后在 extract_path 下递归删除)
+GARBAGE_NAMES = set(_config.get('garbage_list', []))
 
 # 正则常量
 SPLIT_VOL_RE = re.compile(r'\.(\d{3})$')                      # .001 / .002 ...
@@ -62,10 +84,6 @@ NORMAL_EXTS = {
     # misc
     '.iso', '.log', '.ini', '.conf',
 }
-
-# 脚本目录与外部资源路径(便携式 — 工具与垃圾清单都跟着 jieya.py 走)
-SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-GARBAGE_LIST_FILE = os.path.join(SCRIPT_DIR, 'garbage_list.txt')
 
 
 # ============================================================
@@ -409,23 +427,9 @@ def extract_loop(tmp_dir, output_dir):
 # 垃圾文件清理
 # ============================================================
 
-def _load_garbage_list():
-    """读 garbage_list.txt,返回要删除的完整文件名集合(忽略空行和 # 注释行)。"""
-    if not os.path.isfile(GARBAGE_LIST_FILE):
-        return set()
-    names = set()
-    with open(GARBAGE_LIST_FILE, encoding='utf-8') as f:
-        for line in f:
-            line = line.strip()
-            if not line or line.startswith('#'):
-                continue
-            names.add(line)
-    return names
-
-
 def purge_garbage(root_dir):
-    """递归删除 root_dir 下所有完整名命中 garbage_list.txt 的文件。"""
-    names = _load_garbage_list()
+    """递归删除 root_dir 下所有完整名命中 config.json 中 garbage_list 的文件。"""
+    names = GARBAGE_NAMES
     if not names or not os.path.isdir(root_dir):
         return
     removed = 0

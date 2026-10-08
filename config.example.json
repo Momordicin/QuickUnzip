@@ -1,0 +1,12 @@
+{
+    "file_path": "E:/downloads/archives/",
+    "extract_path": "E:/downloads/extracted/",
+    "passwords": [
+        "anon",
+        "1234"
+    ],
+    "garbage_list": [
+        "广告.txt",
+        "readme.url"
+    ]
+}

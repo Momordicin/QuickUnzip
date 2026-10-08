@@ -11,8 +11,12 @@
 # 快速食用指南  
 ## Setup
 1. 下载源码, 无需安装任何依赖  
-2. 在jieya.py文件中, 设置**压缩包路径 file_path, 解压路径 extract_path, 密码库 PASSWORDS**  
-3. 如有需要, 在garbage_list, 罗列垃圾文件名(包含后缀), 或者垃圾文件规则  
+2. 将 `config.example.json` 重命名 `config.json`(本地文件, 已加入 .gitignore, 不会上传)  
+3. 在 `config.json` 中设置:  
+   - `file_path`: 压缩包路径  
+   - `extract_path`: 解压路径  
+   - `passwords`: 密码库, 按顺序尝试, 全部失败后再无密码尝试一次  
+   - `garbage_list`: 垃圾文件名(完整文件名, 包含后缀), 解压后在解压路径下递归删除  
 ## 使用  
 1. python jieya.py  
 2. 如需单独执行处理垃圾文件, 文件名格式化等, 按需使用以下命令  
