@@ -31,6 +31,9 @@ BUNDLED_BINARIES = ['7z.exe', '7z.dll', 'UnRAR.exe']
 BUNDLED_DATA = ['config.example.json']
 # 放在 exe 旁边给用户看的文件
 SIDE_FILES = ['README.md', 'LICENSE']
+# 程序图标源文件;打包时生成多尺寸 ico(资源管理器小图标需要 16/32/48 px)
+ICON_SRC = os.path.join('assets', 'icon_app.ico')
+ICON_SIZES = [16, 24, 32, 48, 64, 128, 256]
 
 
 def _git_version():
@@ -44,7 +47,34 @@ def _git_version():
         return 'dev'
 
 
-def run_pyinstaller():
+def make_icon():
+    """把 ICON_SRC 转成含 ICON_SIZES 各尺寸的 ico 放到 build/ 下,返回其路径。
+
+    源 ico 只有单一大尺寸时,Windows 缩到 16/32 px 显示会发糊;
+    没装 Pillow 时退回直接用源文件。
+    """
+    src = os.path.join(ROOT, ICON_SRC)
+    try:
+        from PIL import Image
+    except ImportError:
+        print("未安装 Pillow,直接使用原始图标(小尺寸显示可能发糊)")
+        return src
+    out_dir = os.path.join(BUILD_DIR, 'icon')
+    os.makedirs(out_dir, exist_ok=True)
+    out = os.path.join(out_dir, f'{APP_NAME}.ico')
+    with Image.open(src) as img:
+        img = img.convert('RGBA')
+        side = max(img.size)
+        if img.size != (side, side):
+            canvas = Image.new('RGBA', (side, side), (0, 0, 0, 0))
+            canvas.paste(img, ((side - img.width) // 2, (side - img.height) // 2))
+            img = canvas
+        img = img.resize((256, 256), Image.LANCZOS)
+        img.save(out, format='ICO', sizes=[(n, n) for n in ICON_SIZES])
+    return out
+
+
+def run_pyinstaller(icon):
     try:
         import PyInstaller.__main__
     except ImportError:
@@ -61,6 +91,7 @@ def run_pyinstaller():
         '--distpath', DIST_DIR,
         '--workpath', BUILD_DIR,
         '--specpath', BUILD_DIR,
+        '--icon', icon,
     ]
     for name in BUNDLED_BINARIES:
         args += ['--add-binary', f"{os.path.join(ROOT, name)}{os.pathsep}."]
@@ -89,12 +120,12 @@ def main():
     args = parser.parse_args()
     version = args.version or _git_version()
 
-    missing = [n for n in BUNDLED_BINARIES + BUNDLED_DATA + SIDE_FILES
+    missing = [n for n in BUNDLED_BINARIES + BUNDLED_DATA + SIDE_FILES + [ICON_SRC]
                if not os.path.isfile(os.path.join(ROOT, n))]
     if missing:
         sys.exit(f"缺少文件: {', '.join(missing)}")
 
-    run_pyinstaller()
+    run_pyinstaller(make_icon())
     zip_path = assemble_release(version)
     print(f"\n程序目录: {APP_DIST}")
     print(f"发布包:   {zip_path}")

@@ -30,6 +30,8 @@ QuickUnzip/
   把压缩包放进 `待解压/`, 双击 `QuickUnzip.exe`, 结果在自动生成的 `已解压/` 里  
 - **方式二: 拖放**  
   把压缩包 (或装着压缩包的文件夹) 直接拖到 `QuickUnzip.exe` 图标上, 压缩包可以在电脑上任何位置  
+  - 推荐建一个桌面快捷方式: 按住 `Alt` 把 `QuickUnzip.exe` 拖到桌面, 以后直接把压缩包拖到桌面图标上即可  
+  - 可以一次选中多个压缩包/文件夹一起拖  
   - 拖入文件: 解压到压缩包旁边  
   - 拖入文件夹: 解压到旁边的 `<文件夹名>_已解压/`  
   - 只清理/重命名本次新解压出来的文件夹, 不动旁边原有的文件  
@@ -87,7 +89,7 @@ python jieya.py --no-pause ...               # 结束后不等待回车, 用于�
 
 ## 打包 exe
 ```bash
-pip install -r requirements-dev.txt          # 只需要 PyInstaller
+pip install -r requirements-dev.txt          # PyInstaller + Pillow(生成多尺寸图标)
 python build.py                              # 可选 --version v1.0.0, 默认取 git describe
 ```
 产物:
@@ -107,6 +109,7 @@ git push origin v1.0.0
 ```
 jieya.py               主程序
 build.py               打包脚本
+assets/                程序图标
 config.example.json    配置模板 (首次运行 / 打包时生成 config.json)
 7z.exe 7z.dll UnRAR.exe  外部解压工具 (Windows)
 7zz 7zzs               7-Zip Linux 版本 (当前未使用)
