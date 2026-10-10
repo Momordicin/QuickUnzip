@@ -1,21 +1,23 @@
 # quickunzip/gui_main.py — 主窗口：拖入或选择文件 / 文件夹、历史下拉、输出路径、开始 / 停止、一行进度与结果
 #
 # 用法：from quickunzip import gui_main；gui_main.run()
-# 配套文件：quickunzip/gui_settings.py / quickunzip/dnd.py / quickunzip/core.py / quickunzip/config.py / quickunzip/paths.py / jieya.py
+# 配套文件：quickunzip/gui_settings.py / quickunzip/single_instance.py / quickunzip/shell_menu.py / quickunzip/dnd.py / quickunzip/core.py / quickunzip/config.py / quickunzip/paths.py / jieya.py
 
 import os
 import queue
 import threading
+import time
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
-from . import core, dnd, paths
+from . import core, dnd, paths, shell_menu, single_instance
 from .config import Config, UserError, norm_path
 from .gui_settings import SettingsWindow
 
 APP_TITLE = 'QuickUnzip'
 HINT = '把文件或文件夹拖到这里\n或点击下方"选择文件" / "选择文件夹"'
 POLL_MS = 100
+REMOTE_BURST_S = 1.5
 
 
 def _short(text, limit=48):
@@ -127,9 +129,11 @@ class HistoryPopup(tk.Toplevel):
 
 
 class MainWindow:
-    def __init__(self, root, cfg, initial_inputs=()):
+    def __init__(self, root, cfg, initial_inputs=(), inbox=None):
         self.root = root
         self.cfg = cfg
+        self.inbox = inbox
+        self.last_remote = time.monotonic()
         self.inputs = []
         self.output_dirty = False
         self.finished = False
@@ -152,6 +156,8 @@ class MainWindow:
         self._build_body()
         self.drop_enabled = dnd.enable(root, self.on_drop)
         self.add_inputs(initial_inputs)
+        if inbox is not None:
+            root.after(POLL_MS, self._poll_inbox)
 
     # ---------- 界面 ----------
 
@@ -316,6 +322,40 @@ class MainWindow:
         self._refresh_list()
         self._clear_result()
         self._set_output('')
+
+    def _poll_inbox(self):
+        while True:
+            try:
+                message = self.inbox.get_nowait()
+            except queue.Empty:
+                break
+            if message and message[0] == 'paths':
+                self._remote_open(message[1])
+        self.root.after(POLL_MS, self._poll_inbox)
+
+    def _remote_open(self, remote_paths):
+        """右键"解压至…": 空闲时填入并切到前台;任务进行中警告一次,不排队。"""
+        now = time.monotonic()
+        new_burst = now - self.last_remote > REMOTE_BURST_S
+        self.last_remote = now
+        self.bring_to_front()
+        if not remote_paths:
+            return
+        if self.busy:
+            if new_burst:
+                messagebox.showwarning(APP_TITLE, '当前有解压任务正在进行, 请等它完成后再添加。',
+                                       parent=self.root)
+            return
+        if new_burst:
+            self.clear_inputs()
+        self.add_inputs(remote_paths)
+
+    def bring_to_front(self):
+        self.root.deiconify()
+        self.root.lift()
+        self.root.attributes('-topmost', True)
+        self.root.after(300, lambda: self.root.attributes('-topmost', False))
+        self.root.focus_force()
 
     def on_drop(self, dropped):
         self.add_inputs(dropped)
@@ -536,15 +576,23 @@ class MainWindow:
 
 
 def run(initial_inputs=()):
-    """创建并运行主窗口。"""
-    set_dpi_aware()
-    root = tk.Tk()
-    try:
-        cfg = Config.load()
-    except UserError as e:
-        root.withdraw()
-        messagebox.showerror(APP_TITLE, str(e))
-        root.destroy()
+    """创建并运行主窗口;已有主窗口在运行时把 initial_inputs 交给它后直接返回。"""
+    inbox = queue.Queue()
+    server = single_instance.deliver_or_serve('main', ('paths', list(initial_inputs)), inbox.put)
+    if server is None:
         return
-    MainWindow(root, cfg, initial_inputs)
-    root.mainloop()
+    try:
+        set_dpi_aware()
+        root = tk.Tk()
+        try:
+            cfg = Config.load()
+        except UserError as e:
+            root.withdraw()
+            messagebox.showerror(APP_TITLE, str(e))
+            root.destroy()
+            return
+        shell_menu.sync_on_startup(cfg.context_menu)
+        MainWindow(root, cfg, initial_inputs, inbox)
+        root.mainloop()
+    finally:
+        server.close()

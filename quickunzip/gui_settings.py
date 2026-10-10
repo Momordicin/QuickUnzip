@@ -1,7 +1,7 @@
 # quickunzip/gui_settings.py — 设置窗口：密码库、常用路径、右键菜单、解压后处理、垃圾清单在同一页上下滚动，点标签跳到对应位置
 #
 # 用法：from quickunzip.gui_settings import SettingsWindow；SettingsWindow(root, on_saved=callback)
-# 配套文件：quickunzip/gui_main.py / quickunzip/config.py
+# 配套文件：quickunzip/gui_main.py / quickunzip/config.py / quickunzip/shell_menu.py
 
 import copy
 import os
@@ -9,6 +9,7 @@ import time
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
+from . import shell_menu
 from .config import Config, UserError, norm_path
 
 APP_TITLE = 'QuickUnzip 设置'
@@ -384,6 +385,10 @@ class SettingsWindow(tk.Toplevel):
         except (OSError, UserError) as e:
             messagebox.showerror(APP_TITLE, f"保存失败: {e}", parent=self)
             return
+        try:
+            shell_menu.apply(self.cfg.context_menu)
+        except OSError as e:
+            messagebox.showerror(APP_TITLE, f"设置已保存, 但写入右键菜单失败: {e}", parent=self)
         self.destroy()
         if self.on_saved:
             self.on_saved()

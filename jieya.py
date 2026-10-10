@@ -1,7 +1,7 @@
-# jieya.py — 程序入口：不带参数打开主窗口，带路径参数时按命令行解压（就地 / 统一输出 / 查看默认输出路径）
+# jieya.py — 程序入口：按启动参数打开主窗口、进度小窗口，或走开发用的命令行
 #
-# 用法：python jieya.py ｜ python jieya.py <路径>... ｜ python jieya.py --to <输出文件夹> <路径>... ｜ python jieya.py --suggest <路径>...
-# 配套文件：quickunzip/gui_main.py / quickunzip/core.py / quickunzip/config.py / build.py
+# 用法：jieya.py（主窗口）｜ jieya.py --to-dialog <路径>...（右键"解压至…"）｜ jieya.py --here <路径>... 或 jieya.py <路径>...（右键"智能解压到此处" / 拖到图标）｜ jieya.py --to <输出文件夹> <路径>... ｜ jieya.py --suggest <路径>...（命令行）
+# 配套文件：quickunzip/gui_main.py / quickunzip/gui_progress.py / quickunzip/shell_menu.py / quickunzip/core.py / quickunzip/config.py / build.py
 
 import argparse
 import os
@@ -47,27 +47,22 @@ def _print_summary(result):
         print(f"源文件移到回收站 {result.deleted} 个")
 
 
-def run(inputs, output_dir=None):
-    """output_dir 为 None 时就地解压;否则统一解压到 output_dir 并记录历史。"""
+def run(inputs, output_dir):
+    """统一解压到 output_dir 并记录历史。"""
     cfg = Config.load()
     core.init_tools()
-    if output_dir is None:
-        jobs = core.plan_in_place(inputs)
-    else:
-        output_dir = os.path.abspath(output_dir)
-        jobs = core.plan_unified(inputs, output_dir)
+    output_dir = os.path.abspath(output_dir)
+    jobs = core.plan_unified(inputs, output_dir)
     if not jobs:
         print("没有可解压的文件。")
         return
-    if output_dir:
-        os.makedirs(output_dir, exist_ok=True)
-        print(f"解压到: {output_dir}\n")
+    os.makedirs(output_dir, exist_ok=True)
+    print(f"解压到: {output_dir}\n")
     extractor = core.Extractor.from_config(cfg, on_progress=_print_progress, log=print)
     result = extractor.run(jobs)
-    if output_dir:
-        cfg.record_run(inputs, output_dir)
+    cfg.record_run(inputs, output_dir)
     _print_summary(result)
-    if output_dir and result.produced:
+    if result.produced:
         _open_folder(output_dir)
 
 
@@ -83,7 +78,7 @@ def main(argv):
     missing = [p for p in ns.inputs if not os.path.exists(p)]
     if missing:
         raise UserError(f"路径不存在: {', '.join(missing)}")
-    if not ns.inputs:
+    if not ns.inputs or not (ns.to or ns.suggest):
         parser.print_help()
         return
     if ns.suggest:
@@ -92,10 +87,27 @@ def main(argv):
     run(ns.inputs, ns.to)
 
 
-if __name__ == "__main__":
-    if len(sys.argv) == 1:
+def launch_gui(argv):
+    """窗口模式的启动参数;不是窗口模式时返回 False。"""
+    if not argv:
         from quickunzip import gui_main
         gui_main.run()
+    elif argv[0] == '--to-dialog':
+        from quickunzip import gui_main
+        gui_main.run([p for p in argv[1:] if os.path.exists(p)])
+    elif argv[0] == '--here':
+        from quickunzip import gui_progress
+        gui_progress.run(argv[1:])
+    elif all(os.path.exists(a) for a in argv):
+        from quickunzip import gui_progress
+        gui_progress.run(argv)
+    else:
+        return False
+    return True
+
+
+if __name__ == "__main__":
+    if launch_gui(sys.argv[1:]):
         sys.exit()
 
     # 双击 / 拖放启动时窗口会在结束后立刻关闭,因此默认停住等回车;
