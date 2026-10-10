@@ -33,6 +33,7 @@ class ProgressWindow:
         self.user_closed = False
         self.total = self.done = self.ok = self.failed = 0
         self.kept_no_recycle_bin = 0
+        self.log_write_failed = False
         self.batch_offset = 0
         self.stopped = False
         self.error = None
@@ -159,6 +160,8 @@ class ProgressWindow:
             self.ok += result.succeeded
             self.failed += result.failed
             self.kept_no_recycle_bin += result.kept_no_recycle_bin
+            if result.failures and not result.log_file:
+                self.log_write_failed = True
             self.stopped = self.stopped or result.stopped
             self.counts_var.set(f"成功 {self.ok} 个 / 失败 {self.failed} 个")
         elif kind == 'error':
@@ -182,7 +185,9 @@ class ProgressWindow:
             if not self.auto_close_id:
                 self.auto_close_id = self.root.after(AUTO_CLOSE_MS, self._auto_close)
             return
-        if self.failed and not self.link_log.winfo_ismapped():
+        if self.failed and self.log_write_failed:
+            self.status_var.set(f"{self.status_var.get()}  (失败日志写入失败)")
+        elif self.failed and not self.link_log.winfo_ismapped():
             self.link_log.pack(side='left', padx=(12, 0))
 
     def _auto_close(self):

@@ -42,6 +42,14 @@ def set_dpi_aware():
             pass
 
 
+def resolve_output(text):
+    """输出路径必须是带盘符或 UNC 的完整路径;相对路径的含义取决于启动目录,不接受,返回 None。"""
+    expanded = os.path.expandvars(os.path.expanduser(text.strip()))
+    if not expanded or not os.path.splitdrive(expanded)[0] or not os.path.isabs(expanded):
+        return None
+    return norm_path(expanded)
+
+
 def open_path(path):
     try:
         os.startfile(path)
@@ -445,7 +453,11 @@ class MainWindow:
         if not output:
             messagebox.showinfo(APP_TITLE, '请填写输出路径。')
             return
-        output = norm_path(output)
+        resolved = resolve_output(output)
+        if resolved is None:
+            messagebox.showinfo(APP_TITLE, f"请填写完整的输出路径, 例如 D:\\已解压\n当前填的是: {output}")
+            return
+        output = resolved
         if os.path.isfile(output):
             messagebox.showerror(APP_TITLE, f"输出路径是一个文件, 不是文件夹:\n{output}")
             return
@@ -553,8 +565,10 @@ class MainWindow:
             line += ' (' + ', '.join(extras) + ')'
         self.status_var.set(line)
         self.counts_var.set(f"成功 {result.succeeded} 个 / 失败 {result.failed} 个")
-        if result.failures:
+        if result.failures and result.log_file:
             self.link_log.pack(side='left', padx=(12, 0))
+        elif result.failures:
+            self.status_var.set(f"{line}  (失败日志写入失败: {paths.FAIL_LOG_FILE})")
         if result.produced:
             self.link_output.pack(side='left', padx=(12, 0))
 

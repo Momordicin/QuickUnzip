@@ -63,5 +63,41 @@ class WorkTests(unittest.TestCase):
         self.assertEqual(self.cfg.lookup(self.src), os.path.normpath(out))
 
 
+@unittest.skipUnless(os.name == 'nt', 'Windows only')
+class ResolveOutputTests(unittest.TestCase):
+    def test_accepts_full_paths(self):
+        self.assertEqual(gui_main.resolve_output(r'D:\已解压\ '), r'D:\已解压')
+        self.assertEqual(gui_main.resolve_output('D:/a/../b'), r'D:\b')
+        self.assertEqual(gui_main.resolve_output(r'\\nas\share\out'), r'\\nas\share\out')
+        self.assertTrue(gui_main.resolve_output('%USERPROFILE%\\x').endswith('\\x'))
+
+    def test_rejects_relative_paths(self):
+        for text in ('out', r'.\out', r'\out', 'D:out', '   '):
+            self.assertIsNone(gui_main.resolve_output(text), text)
+
+
+class SettingsBadConfigTests(unittest.TestCase):
+    def test_no_empty_window_on_config_error(self):
+        import tkinter as tk
+        from quickunzip import paths
+        from quickunzip.config import UserError
+        from quickunzip.gui_settings import SettingsWindow
+        with tempfile.TemporaryDirectory() as d:
+            bad = os.path.join(d, 'config.json')
+            with open(bad, 'w', encoding='utf-8') as f:
+                f.write('{"passwords": [1,]}')
+            saved = paths.CONFIG_FILE
+            paths.CONFIG_FILE = bad
+            root = tk.Tk()
+            root.withdraw()
+            try:
+                with self.assertRaises(UserError):
+                    SettingsWindow(root)
+                self.assertEqual([w for w in root.winfo_children() if isinstance(w, tk.Toplevel)], [])
+            finally:
+                root.destroy()
+                paths.CONFIG_FILE = saved
+
+
 if __name__ == '__main__':
     unittest.main()

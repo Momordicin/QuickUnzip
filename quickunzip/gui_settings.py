@@ -197,9 +197,10 @@ class HistoryEditor(ttk.Frame):
 
 class SettingsWindow(tk.Toplevel):
     def __init__(self, master, on_saved=None):
+        cfg = Config.load()
         super().__init__(master)
         self.on_saved = on_saved
-        self.cfg = Config.load()
+        self.cfg = cfg
         self.original = copy.deepcopy(self.cfg.data)
 
         self.title(APP_TITLE)
