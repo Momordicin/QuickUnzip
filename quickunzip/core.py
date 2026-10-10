@@ -3,6 +3,7 @@
 # 用法：from quickunzip import core；jobs = core.plan_unified(inputs, output) 或 core.plan_in_place(inputs)；result = core.Extractor.from_config(cfg, on_progress=..., stop_event=...).run(jobs)
 # 配套文件：quickunzip/paths.py / quickunzip/config.py / tests/test_core.py / 7z.exe / 7z.dll / UnRAR.exe
 
+import contextlib
 import os
 import re
 import shutil
@@ -105,16 +106,28 @@ def init_tools():
 _NO_WINDOW = getattr(subprocess, 'CREATE_NO_WINDOW', 0)
 
 
-def _run_tool(cmd):
+def _console_encoding():
+    """控制台程序(本地化版 UnRAR)输出用的 OEM 代码页,中文系统为 cp936。"""
+    try:
+        import ctypes
+        return f'cp{ctypes.windll.kernel32.GetOEMCP()}'
+    except (AttributeError, OSError):
+        return 'utf-8'
+
+
+CONSOLE_ENCODING = _console_encoding()
+
+
+def _run_tool(cmd, encoding='utf-8'):
     return subprocess.run(
         cmd, capture_output=True, text=True,
-        encoding='utf-8', errors='replace',
+        encoding=encoding, errors='replace',
         stdin=subprocess.DEVNULL, creationflags=_NO_WINDOW,
     )
 
 
 def extract_with_7z(file_path, output_path, password):
-    """调 7z.exe 解压。返回 'ok' | 'bad_password' | 'incomplete' | 'corrupt' | 'fail'。"""
+    """调 7z.exe 解压。返回 'ok' | 'bad_password' | 'incomplete' | 'corrupt' | 'not_archive' | 'fail'。"""
     pw_arg = f'-p{password}' if password else '-p'
     result = _run_tool([SEVEN_ZIP_EXE, 'x', file_path, f'-o{output_path}',
                         '-aoa', '-y', pw_arg])
@@ -129,25 +142,28 @@ def extract_with_7z(file_path, output_path, password):
         return 'incomplete'
     if 'CRC' in blob or 'Data error' in blob:
         return 'corrupt'
+    if 'Cannot open the file as archive' in blob or 'Can not open the file as archive' in blob:
+        return 'not_archive'
     return 'fail'
 
 
 def extract_with_unrar(file_path, output_path, password):
-    """调 UnRAR.exe 解压 .rar / .partN.rar。返回 'ok' | 'bad_password' | 'incomplete' | 'corrupt' | 'fail'。"""
+    """调 UnRAR.exe 解压。返回 'ok' | 'bad_password' | 'incomplete' | 'corrupt' | 'not_archive' | 'fail'。"""
     pw_arg = f'-p{password}' if password else '-p-'
     out = output_path
     # UnRAR 要求输出路径必须以分隔符结尾,否则它会把路径当成单个目标文件名而非目录。
     if not out.endswith(os.sep) and not out.endswith('/'):
         out = out + os.sep
-    result = _run_tool([UNRAR_EXE, 'x', '-o+', '-y', pw_arg, file_path, out])
+    result = _run_tool([UNRAR_EXE, 'x', '-o+', '-y', pw_arg, file_path, out],
+                       encoding=CONSOLE_ENCODING)
     if result.returncode == 0:
         return 'ok'
-    # 缺卷时 UnRAR 的退出码与密码错误/无文件可解有重叠,先按输出文本识别。
+    # 缺卷 / 截断与校验错误同为退出码 3,只能按提示文字区分;UnRAR 可能是本地化版本。
     blob = (result.stderr or '') + (result.stdout or '')
-    if any(s in blob for s in ('Cannot find volume',
-                               'start extraction from a previous volume',
-                               'Unexpected end of archive')):
+    if any(s in blob for s in UNRAR_INCOMPLETE_MARKERS):
         return 'incomplete'
+    if result.returncode == UNRAR_BAD_ARCHIVE or 'is not RAR archive' in blob:
+        return 'not_archive'
     if result.returncode in (10, 11):
         return 'bad_password'
     if result.returncode == 3:
@@ -155,10 +171,90 @@ def extract_with_unrar(file_path, output_path, password):
     return 'fail'
 
 
-def _is_rar_file(file_path):
-    """判定是否 rar 系列文件(.rar / .partN.rar),用于分派到 UnRAR.exe。"""
-    lower = file_path.lower()
-    return lower.endswith('.rar') or bool(PART_RAR_RE.search(lower))
+UNRAR_BAD_ARCHIVE = 13
+UNRAR_INCOMPLETE_MARKERS = (
+    'Cannot find volume', 'start extraction from a previous volume', 'Unexpected end of archive',
+    '无法找到卷', '前一卷', '意外的压缩文件末尾',
+)
+
+
+RAR_SIGNATURE = b'Rar!\x1a\x07'
+SFX_SCAN_BYTES = 1 << 20
+
+
+def _has_rar_signature(file_path):
+    """文件头是 RAR 签名;exe 自解压包(MZ 开头)则在前 1MB 里找。"""
+    try:
+        with open(file_path, 'rb') as f:
+            head = f.read(len(RAR_SIGNATURE))
+            if head == RAR_SIGNATURE:
+                return True
+            if head[:2] != b'MZ':
+                return False
+            return RAR_SIGNATURE in head + f.read(SFX_SCAN_BYTES)
+    except OSError:
+        return False
+
+
+def _is_rar_candidate(file_path):
+    """先交给 UnRAR 的文件: .rar 后缀,或文件头是 RAR(改了后缀的 rar)。
+
+    同组有多个 .001 / .002 … 时是按字节切开的分卷,由 7z 拼接处理,不走 UnRAR;
+    单独一个 '资料.666' 只是改了后缀,照常检查。
+    """
+    vk = _volume_key(file_path)
+    if vk and vk[0][1] == 'num' and len(_sibling_volumes(file_path)) > 1:
+        return False
+    return file_path.lower().endswith('.rar') or _has_rar_signature(file_path)
+
+
+@contextlib.contextmanager
+def _as_rar_name(file_path):
+    """UnRAR 对没有 .rar 后缀的文件会出错:临时改名为 '<原名>.rar',用完一定改回原名。"""
+    if file_path.lower().endswith('.rar'):
+        yield file_path
+        return
+    temp = f"{file_path}.rar"
+    if os.path.exists(temp):
+        temp = f"{file_path}.{secrets.token_hex(2)}.rar"
+    try:
+        os.rename(file_path, temp)
+    except OSError:
+        yield file_path
+        return
+    try:
+        yield temp
+    finally:
+        for _ in range(10):
+            try:
+                os.rename(temp, file_path)
+                break
+            except OSError:
+                time.sleep(0.2)
+
+
+def _try_passwords(extractor, file_path, output_path, passwords):
+    """依次尝试 passwords 和无密码;缺卷 / 损坏 / 不是压缩包与密码无关,立即返回。"""
+    saw_bad_password = False
+    for pw in list(passwords) + [None]:
+        status = extractor(file_path, output_path, pw)
+        if status in ('ok', 'incomplete', 'corrupt', 'not_archive'):
+            return status
+        if status == 'bad_password':
+            saw_bad_password = True
+    return 'bad_password' if saw_bad_password else 'fail'
+
+
+def _clear_dir(folder):
+    for entry in os.listdir(folder):
+        full = os.path.join(folder, entry)
+        if os.path.isdir(full) and not os.path.islink(full):
+            shutil.rmtree(full, ignore_errors=True)
+        else:
+            try:
+                os.remove(full)
+            except OSError:
+                pass
 
 
 # ============================================================
@@ -169,10 +265,11 @@ class ExtractError(Exception):
     """解压失败;reason 是用于汇总分组的失败原因(上面的 REASON_* 之一),
     detail 是附在文件名后的补充说明(如缺了哪几卷),可为 None。"""
 
-    def __init__(self, reason, path, detail=None):
+    def __init__(self, reason, path, detail=None, not_archive=False):
         super().__init__(f"{reason}: {path}")
         self.reason = reason
         self.detail = detail
+        self.not_archive = not_archive
 
 
 def _volume_key(path):
@@ -231,7 +328,11 @@ def source_files(path):
 
 
 def extract_file(file_path, output_path, passwords):
-    """解压单个压缩包到 output_path:按后缀分派工具、轮询密码,全失败则抛 ExtractError。"""
+    """解压单个压缩包到 output_path,全失败则抛 ExtractError。
+
+    RAR(后缀或文件头)先用 UnRAR,临时改成 .rar 后缀;UnRAR 认不出这个文件时,
+    恢复原名再交给 7z(缺卷 / 截断 / 损坏 / 密码错误以 UnRAR 的结论为准)。7z 确认不是压缩包时立即停止,不再轮询密码。
+    """
     missing, n_present = _missing_volumes(file_path)
     missing_detail = f"缺少 {', '.join(missing)}" if missing else None
     # 同组只有这一个文件(如 '资料.666')时,它也可能只是被改了后缀的单个压缩包,
@@ -240,29 +341,29 @@ def extract_file(file_path, output_path, passwords):
         raise ExtractError(REASON_MISSING_VOLUME, file_path, missing_detail)
 
     os.makedirs(output_path, exist_ok=True)
-    extractor = extract_with_unrar if _is_rar_file(file_path) else extract_with_7z
+    status = 'not_archive'
+    if _is_rar_candidate(file_path):
+        with _as_rar_name(file_path) as rar_path:
+            status = _try_passwords(extract_with_unrar, rar_path, output_path, passwords)
+        if status in ('not_archive', 'fail'):
+            _clear_dir(output_path)
+    if status in ('not_archive', 'fail'):
+        status = _try_passwords(extract_with_7z, file_path, output_path, passwords)
 
-    # 末尾追加 None = "最后一轮不带密码再试一次",兜住完全无密码的包。
-    saw_bad_password = False
-    for pw in list(passwords) + [None]:
-        status = extractor(file_path, output_path, pw)
-        if status == 'ok':
-            return
-        # 缺卷/截断与密码无关,换密码也没用,立即停止。
-        if status == 'incomplete':
-            if _volume_key(file_path):
-                raise ExtractError(REASON_MISSING_VOLUME, file_path,
-                                   missing_detail or "可能缺少最后一卷, 或某一卷没下载完整")
-            raise ExtractError(REASON_TRUNCATED, file_path)
-        if status == 'corrupt':
-            raise ExtractError(REASON_CORRUPT, file_path)
-        if status == 'bad_password':
-            saw_bad_password = True
+    if status == 'ok':
+        return
+    if status == 'incomplete':
+        if _volume_key(file_path):
+            raise ExtractError(REASON_MISSING_VOLUME, file_path,
+                               missing_detail or "可能缺少最后一卷, 或某一卷没下载完整")
+        raise ExtractError(REASON_TRUNCATED, file_path)
+    if status == 'corrupt':
+        raise ExtractError(REASON_CORRUPT, file_path)
     if missing:
         raise ExtractError(REASON_MISSING_VOLUME, file_path, missing_detail)
-    # 从没报过密码错误 → 大概率根本不是压缩包或格式不支持,而不是密码问题。
-    reason = REASON_BAD_PASSWORD if saw_bad_password else REASON_UNSUPPORTED
-    raise ExtractError(reason, file_path)
+    if status == 'bad_password':
+        raise ExtractError(REASON_BAD_PASSWORD, file_path)
+    raise ExtractError(REASON_UNSUPPORTED, file_path, not_archive=status == 'not_archive')
 
 
 # ============================================================
@@ -508,9 +609,12 @@ def write_failure_log(failures, log_file=None):
     for reason, name in failures:
         grouped.setdefault(reason, []).append(name)
     stamp = time.strftime('%Y-%m-%d %H:%M:%S')
-    with open(log_file, 'a', encoding='utf-8') as f:
-        for reason, names in grouped.items():
-            f.write(f"{stamp} [{reason}] {' | '.join(names)}\n")
+    try:
+        with open(log_file, 'a', encoding='utf-8') as f:
+            for reason, names in grouped.items():
+                f.write(f"{stamp} [{reason}] {' | '.join(names)}\n")
+    except OSError:
+        return None
     return log_file
 
 
@@ -719,8 +823,9 @@ class Extractor:
         name = os.path.basename(task)
         failures_before = len(result.failures)
         work_root = os.path.join(output_dir, WORK_DIR_NAME)
-        rd = _new_random_dir(work_root)
+        rd = None
         try:
+            rd = _new_random_dir(work_root)
             extract_file(task, rd, self.passwords)
             self._process_random_dir(rd, output_dir, work_root,
                                      _archive_stem(name), name, result)
@@ -728,7 +833,8 @@ class Extractor:
             reason, shown = _describe_failure(e, name)
             result.add_failure(reason, shown)
         finally:
-            shutil.rmtree(rd, ignore_errors=True)
+            if rd:
+                shutil.rmtree(rd, ignore_errors=True)
             try:
                 os.rmdir(work_root)
             except OSError:
@@ -745,44 +851,55 @@ class Extractor:
             else:
                 self.log(f"源文件移到回收站失败: {name}")
 
+    def _move_out(self, sources, output_dir, name, result):
+        """把 sources 搬进输出目录:只有一个文件夹时沿用它自己的名字,否则装进名为 name 的文件夹。"""
+        if len(sources) == 1 and os.path.isdir(sources[0]):
+            target = os.path.join(output_dir,
+                                  _safe_output_name(output_dir, os.path.basename(sources[0])))
+            shutil.move(sources[0], target)
+        else:
+            target = os.path.join(output_dir, _safe_output_name(output_dir, name))
+            os.makedirs(target, exist_ok=True)
+            for src in sources:
+                shutil.move(src, os.path.join(target, os.path.basename(src)))
+        result.produced.append(target)
+
     def _process_random_dir(self, rd, output_dir, work_root, last_name, label, result):
-        """根据 classify_output 的判定结果处理一个随机目录的产物。
+        """把一个解压结果目录 rd 的内容全部交付到 output_dir,不丢任何文件。
 
         done_a → 直接搬出唯一子目录(沿用其自身名字);
         done_b → 在 output 下用 last_name 建文件夹,把 rd 内文件搬进去;
-        need_extract → 对每个未完成项再开新随机目录递归处理。
+        need_extract → 顶层的未完成文件再开新随机目录递归解压;解开的压缩包本身不再保留,
+                       解不开的、普通文件、文件夹都留下: 含未完成文件的文件夹当作新一层继续处理,
+                       其余按 done_a / done_b 的规则搬出。
         label 是到达这一层的压缩链路(如 'a.7z → b.zip'),用于失败记录;
-        产物路径与内层失败都记到 result。
+        内层文件确认不是压缩包时当普通文件保留,不算失败。
         """
         tag, payload = classify_output(rd)
 
         if tag == 'done_a':
-            sole = payload
-            target = os.path.join(output_dir,
-                                  _safe_output_name(output_dir, os.path.basename(sole)))
-            shutil.move(sole, target)
-            result.produced.append(target)
+            self._move_out([payload], output_dir, last_name, result)
             return
 
         if tag == 'done_b':
-            target = os.path.join(output_dir, _safe_output_name(output_dir, last_name))
-            os.makedirs(target, exist_ok=True)
-            for entry in os.listdir(rd):
-                shutil.move(os.path.join(rd, entry), os.path.join(target, entry))
-            result.produced.append(target)
+            self._move_out([os.path.join(rd, e) for e in os.listdir(rd)],
+                           output_dir, last_name, result)
             return
 
         deepest_in_rd = _find_deepest_folder_name(rd)
+        consumed = set()
         for item in payload:
             item_label = f"{label} → {os.path.basename(item)}"
             new_rd = _new_random_dir(work_root)
             try:
                 extract_file(item, new_rd, self.passwords)
             except Exception as e:
-                reason, shown = _describe_failure(e, item_label)
-                result.add_failure(reason, shown)
+                if not getattr(e, 'not_archive', False):
+                    reason, shown = _describe_failure(e, item_label)
+                    result.add_failure(reason, shown)
                 shutil.rmtree(new_rd, ignore_errors=True)
                 continue
+            consumed.update(_path_key(p) for p in source_files(item))
             # 命名优先级:该层 archive 自身 stem > rd 中最深目录名 > 父级传下来的 last_name。
             # 这样多层嵌套时最内层 archive 的名字也能被沿用到最终输出。
             item_stem = _archive_stem(os.path.basename(item))
@@ -790,3 +907,15 @@ class Extractor:
             self._process_random_dir(new_rd, output_dir, work_root,
                                      sub_last_name, item_label, result)
             shutil.rmtree(new_rd, ignore_errors=True)
+
+        rest = [os.path.join(rd, e) for e in os.listdir(rd)
+                if _path_key(os.path.join(rd, e)) not in consumed]
+        keep = []
+        for entry in rest:
+            if os.path.isdir(entry) and _walk_has_abnormal(entry):
+                self._process_random_dir(entry, output_dir, work_root, os.path.basename(entry),
+                                         f"{label} → {os.path.basename(entry)}", result)
+            else:
+                keep.append(entry)
+        if keep:
+            self._move_out(keep, output_dir, last_name, result)
