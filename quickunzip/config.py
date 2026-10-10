@@ -6,6 +6,7 @@
 import copy
 import json
 import os
+import tempfile
 import time
 
 from . import paths
@@ -60,6 +61,10 @@ def _fill_defaults(data):
     if not isinstance(data['last_extract_path'], str):
         data['last_extract_path'] = ''
         changed = True
+    for key in ('passwords', 'garbage_list'):
+        if any(not isinstance(v, str) for v in data[key]):
+            data[key] = [str(v) for v in data[key]]
+            changed = True
     good = [h for h in data['history']
             if isinstance(h, dict) and h.get('file_path') and h.get('extract_path')]
     if len(good) != len(data['history']):
@@ -141,11 +146,22 @@ class Config:
         return cfg
 
     def save(self):
-        """先写临时文件再替换,避免写到一半断电/崩溃留下损坏的 config.json。"""
-        tmp = self.path + '.tmp'
-        with open(tmp, 'w', encoding='utf-8') as f:
-            json.dump(self.data, f, ensure_ascii=False, indent=4)
-        os.replace(tmp, self.path)
+        """先写临时文件再替换,避免写到一半断电/崩溃留下损坏的 config.json。
+
+        临时文件名每次不同,几个进程同时保存时不会互相抢同一个文件。
+        """
+        folder = os.path.dirname(os.path.abspath(self.path))
+        fd, tmp = tempfile.mkstemp(dir=folder, prefix='config.', suffix='.tmp')
+        try:
+            with os.fdopen(fd, 'w', encoding='utf-8') as f:
+                json.dump(self.data, f, ensure_ascii=False, indent=4)
+            os.replace(tmp, self.path)
+        except BaseException:
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
+            raise
 
     # ---------- 简单字段 ----------
 

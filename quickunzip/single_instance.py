@@ -88,7 +88,7 @@ class Server:
                 continue
             try:
                 message = conn.recv()
-            except (OSError, EOFError):
+            except Exception:
                 continue
             finally:
                 conn.close()

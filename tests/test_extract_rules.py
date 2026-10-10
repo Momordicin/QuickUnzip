@@ -51,8 +51,11 @@ class RulesTestCase(unittest.TestCase):
         self.calls = []
         original = core._run_tool
 
+        self.cmds = []
+
         def spy(cmd, **kwargs):
             self.calls.append(os.path.basename(cmd[0]).lower())
+            self.cmds.append(cmd)
             return original(cmd, **kwargs)
         core._run_tool = spy
         self.addCleanup(setattr, core, '_run_tool', original)
@@ -152,6 +155,24 @@ class RarFirstTests(RulesTestCase):
         self.assertEqual(os.listdir(self.src), ['资料.666'])
         self.assertEqual(self.out_files(), ['资料/hello.txt'])
 
+    def test_original_never_renamed(self):
+        p = self.write_rar('资料.666')
+        self.run_unified(p)
+        archive_arg = self.cmds[0][-2]
+        self.assertTrue(archive_arg.endswith('资料.666.rar'))
+        self.assertNotEqual(os.path.dirname(archive_arg), self.src)
+        self.assertFalse(os.path.exists(os.path.join(self.out, core.WORK_DIR_NAME)))
+
+    def test_crash_during_unrar_leaves_original_intact(self):
+        p = self.write_rar('资料.666')
+        original = core.extract_with_unrar
+        core.extract_with_unrar = lambda *a: (_ for _ in ()).throw(RuntimeError('boom'))
+        self.addCleanup(setattr, core, 'extract_with_unrar', original)
+        r = self.run_unified(p)
+        self.assertEqual(r.failed, 1)
+        self.assertEqual(os.listdir(self.src), ['资料.666'])
+        self.assertFalse(os.path.exists(os.path.join(self.out, core.WORK_DIR_NAME)))
+
     def test_rar_without_extension(self):
         p = self.write_rar('data')
         r = self.run_unified(p)
@@ -213,6 +234,45 @@ class EarlyStopAndRobustnessTests(RulesTestCase):
             core.plan_unified([p], self.out))
         self.assertEqual(r.failed, 1)
         self.assertIsNone(r.log_file)
+
+
+class WorkDirTests(RulesTestCase):
+    def test_stale_dirs_cleaned_live_ones_kept(self):
+        import subprocess as sp
+        import sys
+        work = os.path.join(self.out, core.WORK_DIR_NAME)
+        stale = os.path.join(work, '999999-dead', 'half')
+        old_format = os.path.join(work, 'ab12cd34')
+        live_proc = sp.Popen([sys.executable, '-c', 'import time; time.sleep(30)'])
+        self.addCleanup(live_proc.wait)
+        self.addCleanup(live_proc.kill)
+        live = os.path.join(work, f'{live_proc.pid}-beef', 'busy')
+        for d in (stale, old_format, live):
+            os.makedirs(d)
+        z = self.zip_of('a.zip', {'d/1.jpg': b'a'})
+        r = self.run_unified(z)
+        self.assertEqual(r.failed, 0, r.failures)
+        self.assertEqual(os.listdir(work), [f'{live_proc.pid}-beef'])
+
+    def test_work_dir_removed_after_run(self):
+        z = self.zip_of('a.zip', {'d/1.jpg': b'a'})
+        self.run_unified(z)
+        self.assertFalse(os.path.exists(os.path.join(self.out, core.WORK_DIR_NAME)))
+
+
+class LegacyVolumeTests(unittest.TestCase):
+    def test_grouping_and_source_files(self):
+        with tempfile.TemporaryDirectory() as d:
+            for name in ('a.rar', 'a.r00', 'a.r01', 'b.zip', 'b.z01', 'c.r00', 'x.zip'):
+                open(os.path.join(d, name), 'w').close()
+            tasks = sorted(os.path.basename(t) for t in core.collect_tasks(d))
+            self.assertEqual(tasks, ['a.rar', 'b.zip', 'c.r00', 'x.zip'])
+            only_part = core._group_split_volumes([os.path.join(d, 'a.r01')])
+            self.assertEqual([os.path.basename(p) for p in only_part], ['a.rar'])
+            self.assertEqual([os.path.basename(p) for p in core.source_files(os.path.join(d, 'a.rar'))],
+                             ['a.rar', 'a.r00', 'a.r01'])
+            self.assertEqual([os.path.basename(p) for p in core.source_files(os.path.join(d, 'x.zip'))],
+                             ['x.zip'])
 
 
 if __name__ == '__main__':

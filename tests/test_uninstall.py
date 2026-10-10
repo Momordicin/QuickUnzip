@@ -27,7 +27,7 @@ class SelfDeleteTests(unittest.TestCase):
     def make_app(self, root):
         app = os.path.join(root, "Quick'Unzip 程序")
         os.makedirs(os.path.join(app, '_internal', 'sub'))
-        for name in ('QuickUnzip.exe', 'config.json', 'README.md', 'LICENSE',
+        for name in ('QuickUnzip.exe', 'config.json', 'README.md', 'LICENSE', 'config.ab12.tmp',
                      paths.FAIL_LOG_NAME, os.path.join('_internal', 'sub', 'x.dll')):
             open(os.path.join(app, name), 'w').close()
         os.makedirs(os.path.join(app, '待解压'))

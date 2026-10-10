@@ -4,6 +4,7 @@
 # 配套文件：quickunzip/gui_main.py / quickunzip/shell_menu.py / quickunzip/paths.py / tests/test_uninstall.py
 
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -11,8 +12,8 @@ import tempfile
 from . import paths, shell_menu
 
 PASSWORD_FILE_NAME = 'QuickUnzip密码本.txt'
-PROGRAM_FILES = ('QuickUnzip.exe', '_internal', 'config.json', 'config.json.tmp',
-                 'README.md', 'LICENSE')
+PROGRAM_FILES = ('QuickUnzip.exe', '_internal', 'config.json', 'README.md', 'LICENSE')
+CONFIG_TEMP_RE = re.compile(r'^config\..+\.tmp$')
 
 
 def is_frozen():
@@ -36,8 +37,13 @@ def remove_registry():
 
 def delete_targets(app_dir=None):
     app_dir = app_dir or paths.APP_DIR
-    return [os.path.join(app_dir, name) for name in PROGRAM_FILES
-            if os.path.exists(os.path.join(app_dir, name))]
+    targets = [os.path.join(app_dir, name) for name in PROGRAM_FILES
+               if os.path.exists(os.path.join(app_dir, name))]
+    try:
+        names = os.listdir(app_dir)
+    except OSError:
+        names = []
+    return targets + [os.path.join(app_dir, n) for n in names if CONFIG_TEMP_RE.match(n)]
 
 
 def _ps_quote(text):

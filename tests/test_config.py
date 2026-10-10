@@ -71,6 +71,18 @@ class LoadTests(ConfigTestCase):
         with self.assertRaises(UserError):
             self.load()
 
+    def test_numbers_become_strings(self):
+        self.write_cfg({"passwords": [1234, "abc", 0.5], "garbage_list": [7]})
+        cfg = self.load()
+        self.assertEqual(cfg.data['passwords'], ['1234', 'abc', '0.5'])
+        self.assertEqual(self.read_cfg()['garbage_list'], ['7'])
+
+    def test_save_leaves_no_temp_files(self):
+        cfg = self.load()
+        cfg.save()
+        cfg.save()
+        self.assertEqual(os.listdir(self.root), ['config.json'])
+
     def test_drops_malformed_history(self):
         self.write_cfg({"history": [{"file_path": "x"}, "junk",
                                     {"file_path": "a", "extract_path": "b"}]})

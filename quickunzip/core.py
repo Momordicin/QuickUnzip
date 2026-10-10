@@ -209,28 +209,29 @@ def _is_rar_candidate(file_path):
 
 
 @contextlib.contextmanager
-def _as_rar_name(file_path):
-    """UnRAR 对没有 .rar 后缀的文件会出错:临时改名为 '<原名>.rar',用完一定改回原名。"""
+def _rar_alias(file_path, work_dir):
+    """UnRAR 对没有 .rar 后缀的文件会出错:在工作目录里放一个 '<原名>.rar' 交给它,原文件不动。
+
+    同一个盘用硬链接(不复制数据),跨盘或文件系统不支持时才复制;用完连同目录删除。
+    """
     if file_path.lower().endswith('.rar'):
         yield file_path
         return
-    temp = f"{file_path}.rar"
-    if os.path.exists(temp):
-        temp = f"{file_path}.{secrets.token_hex(2)}.rar"
+    alias_dir = _new_random_dir(work_dir)
+    alias = os.path.join(alias_dir, os.path.basename(file_path) + '.rar')
     try:
-        os.rename(file_path, temp)
+        try:
+            os.link(file_path, alias)
+        except OSError:
+            shutil.copyfile(file_path, alias)
     except OSError:
+        shutil.rmtree(alias_dir, ignore_errors=True)
         yield file_path
         return
     try:
-        yield temp
+        yield alias
     finally:
-        for _ in range(10):
-            try:
-                os.rename(temp, file_path)
-                break
-            except OSError:
-                time.sleep(0.2)
+        shutil.rmtree(alias_dir, ignore_errors=True)
 
 
 def _try_passwords(extractor, file_path, output_path, passwords):
@@ -321,17 +322,53 @@ def _missing_volumes(path):
     return [vol_name(n) for n in range(1, max(present) + 1) if n not in present], len(present)
 
 
+LEGACY_PART_RE = re.compile(r'\.([rsz])(\d{2})$', re.IGNORECASE)
+
+
+def _legacy_main(path):
+    """老式分卷的后续卷(a.r00 / a.s01 / a.z01)→ 同目录下存在的主卷(a.rar / a.zip),否则 None。"""
+    m = LEGACY_PART_RE.search(path)
+    if not m:
+        return None
+    main = path[:m.start()] + ('.zip' if m.group(1).lower() == 'z' else '.rar')
+    return main if os.path.isfile(main) else None
+
+
+def _legacy_parts(path):
+    """老式分卷主卷(a.rar / a.zip)同目录下的后续卷,按卷序排列。"""
+    lower = path.lower()
+    if lower.endswith('.rar'):
+        letters = 'rs'
+    elif lower.endswith('.zip'):
+        letters = 'z'
+    else:
+        return []
+    base = os.path.normcase(path[:-4])
+    folder = os.path.dirname(path) or '.'
+    parts = []
+    for name in os.listdir(folder):
+        full = os.path.join(folder, name)
+        m = LEGACY_PART_RE.search(name)
+        if (m and m.group(1).lower() in letters and os.path.isfile(full)
+                and os.path.normcase(full[:m.start() - len(name)]) == base):
+            parts.append(((m.group(1).lower(), int(m.group(2))), full))
+    return [full for _, full in sorted(parts)]
+
+
 def source_files(path):
     """一个顶层任务对应的全部源文件:分卷返回同组所有卷,否则只有它自己。"""
     vols = _sibling_volumes(path)
-    return [vols[n] for n in sorted(vols)] if vols else [path]
+    if vols:
+        return [vols[n] for n in sorted(vols)]
+    return [path] + _legacy_parts(path)
 
 
 def extract_file(file_path, output_path, passwords):
     """解压单个压缩包到 output_path,全失败则抛 ExtractError。
 
-    RAR(后缀或文件头)先用 UnRAR,临时改成 .rar 后缀;UnRAR 认不出这个文件时,
-    恢复原名再交给 7z(缺卷 / 截断 / 损坏 / 密码错误以 UnRAR 的结论为准)。7z 确认不是压缩包时立即停止,不再轮询密码。
+    RAR(后缀或文件头)先用 UnRAR,没有 .rar 后缀时在工作目录里放一个 .rar 名字的链接;
+    UnRAR 认不出这个文件时再交给 7z(缺卷 / 截断 / 损坏 / 密码错误以 UnRAR 的结论为准)。
+    7z 确认不是压缩包时立即停止,不再轮询密码。原文件始终不改名、不改动。
     """
     missing, n_present = _missing_volumes(file_path)
     missing_detail = f"缺少 {', '.join(missing)}" if missing else None
@@ -343,7 +380,7 @@ def extract_file(file_path, output_path, passwords):
     os.makedirs(output_path, exist_ok=True)
     status = 'not_archive'
     if _is_rar_candidate(file_path):
-        with _as_rar_name(file_path) as rar_path:
+        with _rar_alias(file_path, os.path.dirname(os.path.abspath(output_path))) as rar_path:
             status = _try_passwords(extract_with_unrar, rar_path, output_path, passwords)
         if status in ('not_archive', 'fail'):
             _clear_dir(output_path)
@@ -426,10 +463,18 @@ def _walk_has_abnormal(folder):
 
 def _group_split_volumes(file_paths):
     """把 .001 / .002 ... 与 .part1.rar / .part2.rar ... 分卷归组,每组只保留卷号最小的一卷
-    (其余由 7z / UnRAR 自动联动)。最小卷号不是 1 时照样保留,由 extract_file 报"缺少第一卷"。"""
+    (其余由 7z / UnRAR 自动联动)。最小卷号不是 1 时照样保留,由 extract_file 报"缺少第一卷"。
+
+    老式分卷(a.rar + a.r00 …、a.zip + a.z01 …)只保留主卷;只选了后续卷时换成主卷。
+    """
     grouped = {}
     singles = []
+    seen = set()
     for fp in file_paths:
+        fp = _legacy_main(fp) or fp
+        if _path_key(fp) in seen:
+            continue
+        seen.add(_path_key(fp))
         vk = _volume_key(fp)
         if vk:
             key, num, _width = vk
@@ -565,6 +610,64 @@ def plan_in_place(inputs):
             jobs += [(t, p) for t in collect_tasks(p)]
     jobs = [(t, os.path.dirname(t)) for t in _group_split_volumes(files)] + jobs
     return _dedupe_jobs(jobs)
+
+
+# ============================================================
+# 工作目录
+# ============================================================
+
+RUN_DIR_RE = re.compile(r'^(\d+)-[0-9a-f]+$')
+
+
+def _pid_alive(pid):
+    if os.name != 'nt':
+        try:
+            os.kill(pid, 0)
+        except OSError:
+            return False
+        return True
+    import ctypes
+    from ctypes import wintypes
+    k32 = ctypes.WinDLL('kernel32', use_last_error=True)
+    k32.OpenProcess.restype = wintypes.HANDLE
+    k32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+    k32.GetExitCodeProcess.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD)]
+    k32.CloseHandle.argtypes = [wintypes.HANDLE]
+    PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+    ERROR_ACCESS_DENIED = 5
+    STILL_ACTIVE = 259
+    handle = k32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+    if not handle:
+        return ctypes.get_last_error() == ERROR_ACCESS_DENIED
+    code = wintypes.DWORD()
+    ok = k32.GetExitCodeProcess(handle, ctypes.byref(code))
+    k32.CloseHandle(handle)
+    return bool(ok) and code.value == STILL_ACTIVE
+
+
+def clean_stale_work(output_dir):
+    """删除 output_dir/.quickunzip_tmp 下已退出进程(崩溃、断电、被结束)留下的工作目录。
+
+    每次运行的工作目录名是 '<进程号>-<随机串>';进程还在的不动,其余一律清掉。
+    """
+    root = os.path.join(output_dir, WORK_DIR_NAME)
+    try:
+        names = os.listdir(root)
+    except OSError:
+        return
+    for name in names:
+        m = RUN_DIR_RE.match(name)
+        if m and (int(m.group(1)) == os.getpid() or _pid_alive(int(m.group(1)))):
+            continue
+        shutil.rmtree(os.path.join(root, name), ignore_errors=True)
+
+
+def _remove_work_root(work_root):
+    shutil.rmtree(work_root, ignore_errors=True)
+    try:
+        os.rmdir(os.path.dirname(work_root))
+    except OSError:
+        pass
 
 
 # ============================================================
@@ -799,15 +902,20 @@ class Extractor:
             init_tools()
         result = RunResult()
         result.total = len(jobs)
+        self.work_roots = {}
         done = 0
-        for task, output_dir in jobs:
-            if self._stopping():
-                result.stopped = True
-                result.skipped = result.total - done
-                break
-            self.on_progress(done, result.total, os.path.basename(task), result)
-            self._run_one(task, output_dir, result)
-            done += 1
+        try:
+            for task, output_dir in jobs:
+                if self._stopping():
+                    result.stopped = True
+                    result.skipped = result.total - done
+                    break
+                self.on_progress(done, result.total, os.path.basename(task), result)
+                self._run_one(task, output_dir, result)
+                done += 1
+        finally:
+            for work_root in self.work_roots.values():
+                _remove_work_root(work_root)
 
         for p in result.produced:
             if self.purge:
@@ -822,9 +930,9 @@ class Extractor:
         """解压一个顶层任务并递归处理产物;全部成功且开启了删除源文件时移到回收站。"""
         name = os.path.basename(task)
         failures_before = len(result.failures)
-        work_root = os.path.join(output_dir, WORK_DIR_NAME)
         rd = None
         try:
+            work_root = self._work_root(output_dir)
             rd = _new_random_dir(work_root)
             extract_file(task, rd, self.passwords)
             self._process_random_dir(rd, output_dir, work_root,
@@ -835,10 +943,6 @@ class Extractor:
         finally:
             if rd:
                 shutil.rmtree(rd, ignore_errors=True)
-            try:
-                os.rmdir(work_root)
-            except OSError:
-                pass
 
         if len(result.failures) > failures_before:
             result.failed += 1
@@ -850,6 +954,17 @@ class Extractor:
                 result.deleted += len(files)
             else:
                 self.log(f"源文件移到回收站失败: {name}")
+
+    def _work_root(self, output_dir):
+        """本次运行在 output_dir 下的工作目录;第一次用到时先清掉已退出进程留下的残留。"""
+        key = _path_key(output_dir)
+        if key not in self.work_roots:
+            clean_stale_work(output_dir)
+            work_root = os.path.join(output_dir, WORK_DIR_NAME,
+                                     f"{os.getpid()}-{secrets.token_hex(4)}")
+            os.makedirs(work_root)
+            self.work_roots[key] = work_root
+        return self.work_roots[key]
 
     def _move_out(self, sources, output_dir, name, result):
         """把 sources 搬进输出目录:只有一个文件夹时沿用它自己的名字,否则装进名为 name 的文件夹。"""

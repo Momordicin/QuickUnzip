@@ -42,6 +42,19 @@ class SingleInstanceTests(unittest.TestCase):
             server.close()
         self.assertTrue(self.inbox.empty())
 
+    def test_garbage_message_does_not_kill_server(self):
+        from multiprocessing.connection import Client
+        server = single_instance.deliver_or_serve(self.channel, ('paths', []), self.inbox.put)
+        try:
+            conn = Client(server.address, family='AF_PIPE', authkey=single_instance.AUTHKEY)
+            conn.send_bytes(b'not a pickle')
+            conn.close()
+            self.assertIsNone(single_instance.deliver_or_serve(
+                self.channel, ('paths', ['after']), lambda m: None))
+            self.assertEqual(self.get(), ('paths', ['after']))
+        finally:
+            server.close()
+
     def test_after_close_next_one_serves(self):
         server = single_instance.deliver_or_serve(self.channel, ('paths', []), self.inbox.put)
         server.close()
