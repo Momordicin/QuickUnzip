@@ -3,3 +3,7 @@ config.json
 已解压/
 build/
 dist/
+解压失败日志.txt
+config.json.tmp
+__pycache__/
+docs/

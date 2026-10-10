@@ -1,12 +1,22 @@
 {
-    "file_path": "待解压",
-    "extract_path": "已解压",
     "passwords": [
         "anon",
         "1234"
     ],
     "garbage_list": [
-        "广告.txt",
+        "广告.html",
         "readme.url"
-    ]
+    ],
+    "history": [],
+    "last_extract_path": "",
+    "context_menu": {
+        "file": true,
+        "folder": true,
+        "background": true
+    },
+    "post_process": {
+        "purge_garbage": true,
+        "rename": true,
+        "delete_source": false
+    }
 }
