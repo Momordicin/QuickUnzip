@@ -1,7 +1,7 @@
 # quickunzip/gui_main.py — 主窗口：拖入或选择文件 / 文件夹、历史下拉、输出路径、开始 / 停止、一行进度与结果
 #
 # 用法：from quickunzip import gui_main；gui_main.run()
-# 配套文件：quickunzip/gui_settings.py / quickunzip/single_instance.py / quickunzip/shell_menu.py / quickunzip/dnd.py / quickunzip/core.py / quickunzip/config.py / quickunzip/paths.py / jieya.py
+# 配套文件：quickunzip/gui_settings.py / quickunzip/uninstall.py / quickunzip/single_instance.py / quickunzip/shell_menu.py / quickunzip/dnd.py / quickunzip/core.py / quickunzip/config.py / quickunzip/paths.py / jieya.py
 
 import os
 import queue
@@ -10,7 +10,7 @@ import time
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
-from . import core, dnd, paths, shell_menu, single_instance
+from . import core, dnd, paths, shell_menu, single_instance, uninstall
 from .config import Config, UserError, norm_path
 from .gui_settings import SettingsWindow
 
@@ -181,7 +181,7 @@ class MainWindow:
         menubar = tk.Menu(self.root)
         menu = tk.Menu(menubar, tearoff=False)
         menu.add_command(label='设置…', command=self.open_settings)
-        menu.add_command(label='卸载…(下一版本)', state='disabled')
+        menu.add_command(label='卸载…', command=self.uninstall)
         menu.add_separator()
         menu.add_command(label='关于', command=self.show_about)
         menu.add_command(label='退出', command=self.on_close)
@@ -424,7 +424,8 @@ class MainWindow:
         self.listbox.configure(state='disabled' if busy else 'normal')
         self.btn_start.state(['disabled'] if busy else ['!disabled'])
         self.btn_stop.state(['!disabled'] if busy else ['disabled'])
-        self.menu.entryconfigure(0, state='disabled' if busy else 'normal')
+        for index in (0, 1):
+            self.menu.entryconfigure(index, state='disabled' if busy else 'normal')
 
     def _clear_result(self):
         self.status_var.set('就绪')
@@ -561,6 +562,59 @@ class MainWindow:
     def _settings_saved(self):
         self.cfg = Config.load()
         self._suggest_output()
+
+    def uninstall(self):
+        if self.busy:
+            return
+        frozen = uninstall.is_frozen()
+        if frozen:
+            detail = ('将删除: 右键菜单、QuickUnzip.exe、_internal、config.json\n'
+                      '保留: 待解压/、已解压/ 及其中的文件, 解压失败日志.txt')
+        else:
+            detail = '源码运行: 只清除右键菜单并在配置里关闭它, 不删除任何文件。'
+        if not messagebox.askyesno(APP_TITLE, f"确定卸载 QuickUnzip 吗?\n\n{detail}",
+                                   icon='warning', parent=self.root):
+            return
+        try:
+            cfg = Config.load()
+        except UserError as e:
+            messagebox.showerror(APP_TITLE, str(e), parent=self.root)
+            return
+
+        exported = None
+        if cfg.passwords:
+            exported = filedialog.asksaveasfilename(
+                parent=self.root, title='导出密码本(一行一个密码)',
+                initialdir=uninstall.default_export_dir(),
+                initialfile=uninstall.PASSWORD_FILE_NAME,
+                defaultextension='.txt', filetypes=[('文本文件', '*.txt')])
+            if exported:
+                try:
+                    uninstall.export_passwords(exported, cfg.passwords)
+                except OSError as e:
+                    messagebox.showerror(APP_TITLE, f"导出密码本失败, 已取消卸载:\n{e}",
+                                         parent=self.root)
+                    return
+            elif not messagebox.askyesno(APP_TITLE, '没有导出密码本, 卸载后密码库将无法找回。\n'
+                                                    '仍要继续卸载吗?', icon='warning',
+                                         parent=self.root):
+                return
+
+        try:
+            uninstall.remove_registry()
+        except OSError as e:
+            messagebox.showerror(APP_TITLE, f"清除右键菜单失败, 已取消卸载:\n{e}", parent=self.root)
+            return
+        done = f"\n密码本已导出到:\n{exported}" if exported else ''
+        if not frozen:
+            cfg.data['context_menu'] = {k: False for k in cfg.context_menu}
+            cfg.save()
+            messagebox.showinfo(APP_TITLE, f"已清除右键菜单。{done}", parent=self.root)
+            return
+        uninstall.schedule_self_delete()
+        messagebox.showinfo(APP_TITLE, f"卸载完成, 关闭此提示后程序文件将被删除。{done}",
+                            parent=self.root)
+        self.root.destroy()
 
     def show_about(self):
         messagebox.showinfo(APP_TITLE, 'QuickUnzip\n批量递归解压 · 密码库 · 垃圾清理 · 重命名\n\n'

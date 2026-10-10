@@ -74,7 +74,7 @@ def run_pyinstaller(icon):
         os.path.join(ROOT, 'jieya.py'),
         '--name', APP_NAME,
         '--onedir',
-        '--console',
+        '--windowed',
         '--noconfirm',
         '--clean',
         '--distpath', DIST_DIR,
@@ -94,7 +94,6 @@ def assemble_release(version):
     """在 dist/QuickUnzip/ 中补齐用户可见文件,并打成 zip。"""
     shutil.copyfile(os.path.join(ROOT, 'config.example.json'),
                     os.path.join(APP_DIST, 'config.json'))
-    os.makedirs(os.path.join(APP_DIST, '待解压'), exist_ok=True)
     for name in SIDE_FILES:
         shutil.copyfile(os.path.join(ROOT, name), os.path.join(APP_DIST, name))
 
