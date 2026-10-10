@@ -1,15 +1,7 @@
-"""QuickUnzip 入口。
-
-CLI:
-    python jieya.py <压缩包或文件夹> ...                智能解压到此处: 文件解压到它旁边,
-                                                        文件夹解压到它里面(不记历史)
-    python jieya.py --to <输出文件夹> <压缩包或文件夹> ...
-                                                        全部解压到同一个输出文件夹,
-                                                        文件夹输入写入历史映射
-    python jieya.py --suggest <压缩包或文件夹> ...      只打印默认输出路径
-
-失败日志统一写在程序所在文件夹的 解压失败日志.txt。
-"""
+# jieya.py — 程序入口：不带参数打开主窗口，带路径参数时按命令行解压（就地 / 统一输出 / 查看默认输出路径）
+#
+# 用法：python jieya.py ｜ python jieya.py <路径>... ｜ python jieya.py --to <输出文件夹> <路径>... ｜ python jieya.py --suggest <路径>...
+# 配套文件：quickunzip/gui_main.py / quickunzip/core.py / quickunzip/config.py / build.py
 
 import argparse
 import os
@@ -101,6 +93,11 @@ def main(argv):
 
 
 if __name__ == "__main__":
+    if len(sys.argv) == 1:
+        from quickunzip import gui_main
+        gui_main.run()
+        sys.exit()
+
     # 双击 / 拖放启动时窗口会在结束后立刻关闭,因此默认停住等回车;
     # 在脚本或终端里调用可加 --no-pause。
     pause = '--no-pause' not in sys.argv and sys.stdin is not None and sys.stdin.isatty()

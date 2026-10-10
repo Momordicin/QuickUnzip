@@ -1,15 +1,7 @@
-"""解压引擎(不含界面)。
-
-把压缩包(zip / 7z / rar / .001 分卷 / .partN.rar,以及任何改了后缀的压缩包)递归解压,
-过程中自动判定何时停止递归,并把产物按"压缩链路最后一层有意义的名字"放进输出目录。
-完成后可清理已知垃圾文件、按文件夹的 No.xxx 编号批量重命名叶子目录里的文件、
-把解压成功的源文件移到回收站。
-
-两种任务规划:
-    plan_unified(paths, output_dir)   全部输入解压到同一个输出文件夹(主窗口)
-    plan_in_place(paths)              文件解压到它旁边,文件夹解压到它里面(右键 / 拖到图标)
-规划结果交给 Extractor.run() 执行;进度、停止、日志都通过参数注入,引擎本身不打印。
-"""
+# quickunzip/core.py — 解压引擎（无界面）：递归解压、密码轮询、分卷检查、任务规划（统一输出 / 就地）、垃圾清理、重命名、源文件移到回收站
+#
+# 用法：from quickunzip import core；jobs = core.plan_unified(inputs, output) 或 core.plan_in_place(inputs)；result = core.Extractor.from_config(cfg, on_progress=..., stop_event=...).run(jobs)
+# 配套文件：quickunzip/paths.py / quickunzip/config.py / tests/test_core.py / 7z.exe / 7z.dll / UnRAR.exe
 
 import os
 import re
@@ -26,10 +18,10 @@ from .config import UserError
 # 常量
 # ============================================================
 
-SPLIT_VOL_RE = re.compile(r'\.(\d{3})$')                      # .001 / .002 ...
-PART_RAR_RE = re.compile(r'\.part(\d+)\.rar$', re.IGNORECASE)  # .part1.rar / .part2.rar ...
-NO_PATTERN = re.compile(r'[Nn][Oo]\.(\d+)')                   # 文件夹名中的 No.xxx
-DIGIT_RUN = re.compile(r'\d+')                                # 任一段连续数字
+SPLIT_VOL_RE = re.compile(r'\.(\d{3})$')
+PART_RAR_RE = re.compile(r'\.part(\d+)\.rar$', re.IGNORECASE)
+NO_PATTERN = re.compile(r'[Nn][Oo]\.(\d+)')
+DIGIT_RUN = re.compile(r'\d+')
 
 # 解压中间产物的工作目录,建在输出目录下,用完即删
 WORK_DIR_NAME = '.quickunzip_tmp'
@@ -482,17 +474,17 @@ class RunResult:
     """一次批量解压的结果。"""
 
     def __init__(self):
-        self.total = 0          # 规划的顶层任务数
-        self.produced = []      # 搬进输出目录的顶层产物路径
-        self.succeeded = 0      # 顶层任务数(含内层全部成功)
-        self.failed = 0         # 顶层任务数(本层或任一内层失败)
-        self.failures = []      # [(reason, 显示名)]
-        self.stopped = False    # 是否被用户停止
-        self.skipped = 0        # 停止时尚未处理的顶层任务数
-        self.deleted = 0        # 移到回收站的源文件数
-        self.purged = 0         # 清理的垃圾文件数
-        self.renamed = 0        # 重命名的文件数
-        self.log_file = None    # 本次写入的失败日志,无失败时为 None
+        self.total = 0
+        self.produced = []
+        self.succeeded = 0
+        self.failed = 0
+        self.failures = []
+        self.stopped = False
+        self.skipped = 0
+        self.deleted = 0
+        self.purged = 0
+        self.renamed = 0
+        self.log_file = None
 
     def add_failure(self, reason, name):
         self.failures.append((reason, name))
@@ -738,7 +730,7 @@ class Extractor:
         finally:
             shutil.rmtree(rd, ignore_errors=True)
             try:
-                os.rmdir(work_root)     # 只在空时成功
+                os.rmdir(work_root)
             except OSError:
                 pass
 

@@ -1,4 +1,7 @@
-"""引擎测试:用仓库里的 7z.exe 现场生成压缩包。"""
+# tests/test_core.py — core.py 的单元测试：用仓库根目录的 7z.exe 现场生成压缩包，覆盖任务规划、解压、后处理、删除源文件、停止
+#
+# 用法：python -m unittest discover -s tests -t .
+# 配套文件：quickunzip/core.py / 7z.exe
 
 import os
 import subprocess
@@ -161,7 +164,7 @@ class ExtractTests(CoreTestCase):
         self.make_files(os.path.join(stage, 'No.7 set'), ['img_01.jpg', 'img_02.jpg', 'ad.txt'])
         z = self.archive(os.path.join(self.src, 'g.zip'), [os.path.join(stage, 'No.7 set')])
         out = os.path.join(self.root, 'out')
-        self.make_files(out, ['ad.txt'])                     # 输出目录里原有的文件不动
+        self.make_files(out, ['ad.txt'])
         result = self.extractor(garbage_names={'ad.txt'}).run(core.plan_unified([z], out))
         leaf = os.path.join(out, 'No.7 set')
         self.assertEqual(sorted(os.listdir(leaf)), ['7 - 01.jpg', '7 - 02.jpg'])
@@ -220,7 +223,7 @@ class StopAndProgressTests(CoreTestCase):
 
         def progress(done, total, current, result):
             events.append((done, total, current))
-            stop.set()                  # 第一个任务开始时就要求停止
+            stop.set()
 
         result = self.extractor(stop_event=stop, on_progress=progress).run(
             core.plan_unified([self.src], os.path.join(self.root, 'out')))

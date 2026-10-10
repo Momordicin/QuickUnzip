@@ -1,18 +1,7 @@
-"""config.json 读写、旧配置转换、历史映射与默认输出路径规则。
-
-结构:
-{
-    "passwords": [...],                 解压时按顺序尝试
-    "garbage_list": [...],              解压后删除的完整文件名
-    "history": [                        输入文件夹 → 输出文件夹,一对一,最近使用的在前
-        {"file_path": "...", "extract_path": "...", "last_used": "YYYY-MM-DD HH:MM:SS"}
-    ],
-    "last_extract_path": "",            上一次主窗口任务的输出路径
-    "context_menu": {"file": true, "folder": true, "background": true},
-    "post_process": {"purge_garbage": true, "rename": true, "delete_source": false}
-}
-程序自身的路径不写进来,见 paths.py。
-"""
+# quickunzip/config.py — 读写 config.json：旧配置转换、缺省字段补齐、输入文件夹→输出文件夹历史映射与默认输出路径规则
+#
+# 用法：from quickunzip.config import Config, UserError, norm_path；cfg = Config.load()；cfg.suggest_output(inputs)；cfg.record_run(inputs, output)
+# 配套文件：config.example.json / quickunzip/paths.py / quickunzip/gui_main.py / tests/test_config.py
 
 import copy
 import json

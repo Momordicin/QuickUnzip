@@ -1,3 +1,8 @@
+# tests/test_config.py — config.py 的单元测试：加载与补齐、旧配置转换、历史映射与默认输出路径规则
+#
+# 用法：python -m unittest discover -s tests -t .
+# 配套文件：quickunzip/config.py
+
 import json
 import os
 import tempfile

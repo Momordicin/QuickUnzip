@@ -1,18 +1,7 @@
-"""自动打包发版
-
-用法:
-    pip install -r requirements-dev.txt
-    python build.py [--version v1.0.0]
-
-产物:
-    dist/QuickUnzip/                  可直接运行的程序目录
-        QuickUnzip.exe
-        config.json                   由 config.example.json 生成(不会带上开发者本地的 config.json)
-        待解压/
-        _internal/                    Python 运行时 + 7z.exe / 7z.dll / UnRAR.exe
-        README.md / LICENSE
-    dist/QuickUnzip-<version>.zip     上面目录的压缩包,用于发布
-"""
+# build.py — 用 PyInstaller 打包 onedir 版 exe，并生成发布目录 dist/QuickUnzip/ 与发布包 dist/QuickUnzip-<version>.zip
+#
+# 用法：pip install -r requirements-dev.txt；python build.py [--version v1.0.0]
+# 配套文件：jieya.py / config.example.json / assets/icon_app.ico / requirements-dev.txt / .github/workflows/release.yml
 
 import argparse
 import os
@@ -85,7 +74,7 @@ def run_pyinstaller(icon):
         os.path.join(ROOT, 'jieya.py'),
         '--name', APP_NAME,
         '--onedir',
-        '--console',            # 控制台窗口显示进度与汇总
+        '--console',
         '--noconfirm',
         '--clean',
         '--distpath', DIST_DIR,
@@ -97,6 +86,7 @@ def run_pyinstaller(icon):
         args += ['--add-binary', f"{os.path.join(ROOT, name)}{os.pathsep}."]
     for name in BUNDLED_DATA:
         args += ['--add-data', f"{os.path.join(ROOT, name)}{os.pathsep}."]
+    args +=['--add-data', f"{icon}{os.pathsep}."]
     PyInstaller.__main__.run(args)
 
 
