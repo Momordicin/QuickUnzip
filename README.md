@@ -155,7 +155,7 @@ build.py                     打包脚本
 assets/                      程序图标
 config.example.json          配置模板 (首次运行 / 打包时生成 config.json)
 7z.exe 7z.dll UnRAR.exe      外部解压工具 (Windows)
-7zz 7zzs                     7-Zip Linux 版本 (当前未使用)
+7zz / 7zzs                   7-Zip macOS 通用版 / Linux x64 静态版 (当前未使用)
 ```
 
 # 致谢
