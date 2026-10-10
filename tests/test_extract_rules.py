@@ -260,6 +260,47 @@ class WorkDirTests(RulesTestCase):
         self.assertFalse(os.path.exists(os.path.join(self.out, core.WORK_DIR_NAME)))
 
 
+class VolumeSelectionTests(unittest.TestCase):
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.d = self._tmp.name
+        for name in ('m.part1.rar', 'm.part2.rar', 'm.part3.rar', 'v.7z.001', 'v.7z.002', 'a.zip'):
+            open(os.path.join(self.d, name), 'w').close()
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def p(self, name):
+        return os.path.join(self.d, name)
+
+    def tasks(self, *names):
+        return [os.path.basename(t) for t, _ in core.plan_in_place([self.p(n) for n in names])]
+
+    def test_later_volume_maps_to_first_on_disk(self):
+        self.assertEqual(self.tasks('m.part2.rar'), ['m.part1.rar'])
+        self.assertEqual(self.tasks('m.part3.rar', 'm.part2.rar'), ['m.part1.rar'])
+        self.assertEqual(self.tasks('v.7z.002'), ['v.7z.001'])
+
+    def test_missing_first_volume_keeps_lowest_present(self):
+        os.remove(self.p('m.part1.rar'))
+        self.assertEqual(self.tasks('m.part3.rar'), ['m.part2.rar'])
+
+    def test_drop_claimed_skips_rest_of_set_in_later_batches(self):
+        claimed = set()
+        first = core.drop_claimed(core.plan_in_place([self.p('m.part1.rar'), self.p('a.zip')]), claimed)
+        self.assertEqual(sorted(os.path.basename(t) for t, _ in first), ['a.zip', 'm.part1.rar'])
+        later = core.drop_claimed(core.plan_in_place([self.p('m.part2.rar'), self.p('m.part3.rar')]), claimed)
+        self.assertEqual(later, [])
+        other = core.drop_claimed(core.plan_in_place([self.p('v.7z.002')]), claimed)
+        self.assertEqual([os.path.basename(t) for t, _ in other], ['v.7z.001'])
+
+    def test_drop_claimed_covers_folder_requests(self):
+        claimed = set()
+        core.drop_claimed(core.plan_in_place([self.p('m.part2.rar')]), claimed)
+        rest = core.drop_claimed(core.plan_in_place([self.d]), claimed)
+        self.assertEqual(sorted(os.path.basename(t) for t, _ in rest), ['a.zip', 'v.7z.001'])
+
+
 class LegacyVolumeTests(unittest.TestCase):
     def test_grouping_and_source_files(self):
         with tempfile.TemporaryDirectory() as d:

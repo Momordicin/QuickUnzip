@@ -34,6 +34,7 @@ class ProgressWindow:
         self.total = self.done = self.ok = self.failed = 0
         self.kept_no_recycle_bin = 0
         self.log_write_failed = False
+        self.claimed = set()
         self.batch_offset = 0
         self.stopped = False
         self.error = None
@@ -128,7 +129,7 @@ class ProgressWindow:
     def _work(self, batch):
         try:
             cfg = Config.load()
-            jobs = core.plan_in_place(batch)
+            jobs = core.drop_claimed(core.plan_in_place(batch), self.claimed)
             self.events.put(('planned', len(jobs)))
             if not jobs:
                 return

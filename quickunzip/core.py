@@ -363,6 +363,22 @@ def source_files(path):
     return [path] + _legacy_parts(path)
 
 
+def drop_claimed(jobs, claimed):
+    """去掉源文件已在 claimed 里的任务,并把剩下任务的全部源文件(整套分卷)加入 claimed。
+
+    右键多选一整套分卷时,资源管理器为每一卷各启动一个进程,可能分几批到达;
+    第一批开始时就认领整套,后到的同一套直接跳过。
+    """
+    fresh = []
+    for task, output_dir in jobs:
+        members = {_path_key(p) for p in source_files(task)}
+        if members & claimed:
+            continue
+        claimed |= members
+        fresh.append((task, output_dir))
+    return fresh
+
+
 def extract_file(file_path, output_path, passwords):
     """解压单个压缩包到 output_path,全失败则抛 ExtractError。
 
@@ -462,8 +478,9 @@ def _walk_has_abnormal(folder):
 
 
 def _group_split_volumes(file_paths):
-    """把 .001 / .002 ... 与 .part1.rar / .part2.rar ... 分卷归组,每组只保留卷号最小的一卷
-    (其余由 7z / UnRAR 自动联动)。最小卷号不是 1 时照样保留,由 extract_file 报"缺少第一卷"。
+    """把 .001 / .002 ... 与 .part1.rar / .part2.rar ... 分卷归组,每组只保留一卷:同目录下
+    实际存在的卷号最小的那一卷(只选了 part2 也换成 part1;其余由 7z / UnRAR 自动联动)。
+    最小卷号不是 1 时照样保留,由 extract_file 报"缺少第一卷"。
 
     老式分卷(a.rar + a.r00 …、a.zip + a.z01 …)只保留主卷;只选了后续卷时换成主卷。
     """
@@ -484,7 +501,8 @@ def _group_split_volumes(file_paths):
     result = list(singles)
     for _base, vols in grouped.items():
         vols.sort()
-        result.append(vols[0][1])
+        on_disk = _sibling_volumes(vols[0][1])
+        result.append(on_disk[min(on_disk)] if on_disk else vols[0][1])
     return result
 
 
