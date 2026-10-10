@@ -210,6 +210,20 @@ class DeleteSourceTests(CoreTestCase):
         self.assertEqual(result.failed, 1)
         self.assertTrue(os.path.isfile(outer))
 
+    def test_no_recycle_bin_keeps_source(self):
+        z = self.simple_zip(self.src, 'album.zip')
+        result = self.extractor(delete_source=True, can_trash=lambda _p: False).run(
+            core.plan_in_place([z]))
+        self.assertEqual(result.succeeded, 1)
+        self.assertEqual(self.trashed, [])
+        self.assertTrue(os.path.isfile(z))
+        self.assertEqual(result.kept_no_recycle_bin, 1)
+
+    @unittest.skipUnless(os.name == 'nt', 'Windows only')
+    def test_has_recycle_bin(self):
+        self.assertTrue(core.has_recycle_bin(self.src))
+        self.assertFalse(core.has_recycle_bin(r'\\server\share\a.zip'))
+
     def test_disabled_by_default(self):
         self.assertFalse(core.Extractor([]).delete_source)
 

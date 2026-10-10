@@ -686,6 +686,7 @@ class RunResult:
         self.stopped = False
         self.skipped = 0
         self.deleted = 0
+        self.kept_no_recycle_bin = 0
         self.purged = 0
         self.renamed = 0
         self.log_file = None
@@ -725,8 +726,28 @@ def write_failure_log(failures, log_file=None):
 # 回收站
 # ============================================================
 
+def has_recycle_bin(path):
+    """path 所在的盘是否有回收站:只认本地固定硬盘;U 盘、网络共享等没有回收站。"""
+    if os.name != 'nt':
+        return False
+    path = os.path.abspath(path)
+    if path.startswith('\\\\'):
+        return False
+    import ctypes
+    k32 = ctypes.windll.kernel32
+    root = ctypes.create_unicode_buffer(1024)
+    if not k32.GetVolumePathNameW(ctypes.c_wchar_p(path), root, len(root)):
+        return False
+    DRIVE_FIXED = 3
+    return k32.GetDriveTypeW(ctypes.c_wchar_p(root.value)) == DRIVE_FIXED
+
+
 def send_to_trash(file_paths):
-    """把文件移到回收站(SHFileOperationW + FOF_ALLOWUNDO)。成功返回 True。"""
+    """把文件移到回收站(SHFileOperationW + FOF_ALLOWUNDO)。成功返回 True。
+
+    回收站放不下或被关闭时,系统会改为永久删除;FOF_WANTNUKEWARNING 让系统先弹窗确认,
+    否则 FOF_NOCONFIRMATION 会替用户默认回答"是"。
+    """
     if os.name != 'nt' or not file_paths:
         return False
     import ctypes
@@ -749,6 +770,7 @@ def send_to_trash(file_paths):
     FOF_NOCONFIRMATION = 0x0010
     FOF_ALLOWUNDO = 0x0040
     FOF_NOERRORUI = 0x0400
+    FOF_WANTNUKEWARNING = 0x4000
 
     # pFrom 是以 \0 分隔、以 \0\0 结尾的绝对路径列表
     joined = '\0'.join(os.path.abspath(p) for p in file_paths) + '\0\0'
@@ -756,7 +778,8 @@ def send_to_trash(file_paths):
     op = SHFILEOPSTRUCTW()
     op.wFunc = FO_DELETE
     op.pFrom = ctypes.cast(buf, wintypes.LPCWSTR)
-    op.fFlags = FOF_ALLOWUNDO | FOF_NOCONFIRMATION | FOF_SILENT | FOF_NOERRORUI
+    op.fFlags = (FOF_ALLOWUNDO | FOF_NOCONFIRMATION | FOF_SILENT | FOF_NOERRORUI
+                 | FOF_WANTNUKEWARNING)
     rc = ctypes.windll.shell32.SHFileOperationW(ctypes.byref(op))
     return rc == 0 and not op.fAnyOperationsAborted
 
@@ -871,11 +894,12 @@ class Extractor:
     stop_event: threading.Event 之类带 is_set() 的对象;置位后处理完当前任务即停止。
     log(msg): 次要信息(重命名跳过、删除失败等)。
     trash(file_paths) -> bool: 删除源文件的实现,默认移到回收站。
+    can_trash(path) -> bool: path 所在位置能否移到回收站;不能时保留源文件,不会永久删除。
     """
 
     def __init__(self, passwords, garbage_names=(), purge=True, rename=True,
                  delete_source=False, on_progress=None, stop_event=None,
-                 log=None, trash=send_to_trash, fail_log=None):
+                 log=None, trash=send_to_trash, can_trash=has_recycle_bin, fail_log=None):
         self.passwords = list(passwords)
         self.garbage_names = set(garbage_names)
         self.purge = purge
@@ -885,6 +909,7 @@ class Extractor:
         self.stop_event = stop_event
         self.log = log or _noop
         self.trash = trash
+        self.can_trash = can_trash
         self.fail_log = fail_log
 
     @classmethod
@@ -950,7 +975,10 @@ class Extractor:
         result.succeeded += 1
         if self.delete_source:
             files = source_files(task)
-            if self.trash(files):
+            if not self.can_trash(task):
+                result.kept_no_recycle_bin += len(files)
+                self.log(f"所在位置没有回收站, 未删除源文件: {name}")
+            elif self.trash(files):
                 result.deleted += len(files)
             else:
                 self.log(f"源文件移到回收站失败: {name}")

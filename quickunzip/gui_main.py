@@ -488,8 +488,12 @@ class MainWindow:
             extractor = core.Extractor.from_config(cfg, on_progress=progress,
                                                    stop_event=self.stop_event)
             result = extractor.run(jobs)
-            cfg.record_run(inputs, output)
-            self.events.put(('done', result))
+            history_error = None
+            try:
+                cfg.record_run(inputs, output)
+            except OSError as e:
+                history_error = str(e)
+            self.events.put(('done', result, history_error))
         except UserError as e:
             self.events.put(('error', str(e)))
         except Exception as e:
@@ -518,6 +522,9 @@ class MainWindow:
             self.counts_var.set(f"成功 {ok} 个 / 失败 {failed} 个")
         elif kind == 'done':
             self._show_result(event[1])
+            if event[2]:
+                messagebox.showwarning(APP_TITLE, f"解压已完成, 但保存历史记录失败:\n{event[2]}",
+                                       parent=self.root)
         elif kind == 'empty':
             self.status_var.set('没有可解压的文件')
             self.finished = True
@@ -540,6 +547,8 @@ class MainWindow:
             extras.append(f"重命名 {result.renamed}")
         if result.deleted:
             extras.append(f"源文件移到回收站 {result.deleted}")
+        if result.kept_no_recycle_bin:
+            extras.append(f"{result.kept_no_recycle_bin} 个源文件所在位置没有回收站, 未删除")
         if extras:
             line += ' (' + ', '.join(extras) + ')'
         self.status_var.set(line)

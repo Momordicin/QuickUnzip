@@ -55,6 +55,19 @@ class SingleInstanceTests(unittest.TestCase):
         finally:
             server.close()
 
+    def test_close_does_not_hang_when_receiver_already_gone(self):
+        import time
+        server = single_instance.deliver_or_serve(self.channel, ('paths', []), self.inbox.put)
+        single_instance.send(server.address, single_instance._QUIT)
+        server.thread.join(5)
+        self.assertFalse(server.thread.is_alive())
+        start = time.monotonic()
+        server.close()
+        self.assertLess(time.monotonic() - start, 5)
+        again = single_instance.deliver_or_serve(self.channel, ('paths', []), self.inbox.put)
+        self.assertIsInstance(again, single_instance.Server)
+        again.close()
+
     def test_after_close_next_one_serves(self):
         server = single_instance.deliver_or_serve(self.channel, ('paths', []), self.inbox.put)
         server.close()

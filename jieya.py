@@ -45,6 +45,8 @@ def _print_summary(result):
         print(f"重命名文件 {result.renamed} 个")
     if result.deleted:
         print(f"源文件移到回收站 {result.deleted} 个")
+    if result.kept_no_recycle_bin:
+        print(f"{result.kept_no_recycle_bin} 个源文件所在位置没有回收站, 未删除")
 
 
 def run(inputs, output_dir):
@@ -60,8 +62,11 @@ def run(inputs, output_dir):
     print(f"解压到: {output_dir}\n")
     extractor = core.Extractor.from_config(cfg, on_progress=_print_progress, log=print)
     result = extractor.run(jobs)
-    cfg.record_run(inputs, output_dir)
     _print_summary(result)
+    try:
+        cfg.record_run(inputs, output_dir)
+    except OSError as e:
+        print(f"保存历史记录失败: {e}")
     if result.produced:
         _open_folder(output_dir)
 

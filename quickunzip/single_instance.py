@@ -81,10 +81,13 @@ class Server:
         self.thread.start()
 
     def _loop(self):
-        while not self.closed:
+        """只在收到退出消息(或监听被关闭)时结束,保证 close() 发出的退出消息一定有人接。"""
+        while True:
             try:
                 conn = self.listener.accept()
             except (OSError, EOFError, AuthenticationError):
+                if self.closed:
+                    return
                 continue
             try:
                 message = conn.recv()
@@ -94,14 +97,20 @@ class Server:
                 conn.close()
             if message == _QUIT:
                 return
-            self.on_message(message)
+            try:
+                self.on_message(message)
+            except Exception:
+                pass
 
     def close(self):
-        """停止接收;返回后不会再调用 on_message。之后新启动的进程会成为新的服务端。"""
+        """停止接收;返回后不会再调用 on_message。之后新启动的进程会成为新的服务端。
+
+        退出消息从后台线程发出:即使接收线程已意外结束,close() 也最多等 2 秒,不会卡住进程。
+        """
         if self.closed:
             return
         self.closed = True
-        send(self.address, _QUIT)
+        threading.Thread(target=send, args=(self.address, _QUIT), daemon=True).start()
         self.thread.join(2)
         self.listener.close()
         _release_mutex(self.mutex)

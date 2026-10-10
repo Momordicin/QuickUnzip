@@ -32,6 +32,7 @@ class ProgressWindow:
         self.ran = not self.pending
         self.user_closed = False
         self.total = self.done = self.ok = self.failed = 0
+        self.kept_no_recycle_bin = 0
         self.batch_offset = 0
         self.stopped = False
         self.error = None
@@ -157,6 +158,7 @@ class ProgressWindow:
             self.done += result.succeeded + result.failed
             self.ok += result.succeeded
             self.failed += result.failed
+            self.kept_no_recycle_bin += result.kept_no_recycle_bin
             self.stopped = self.stopped or result.stopped
             self.counts_var.set(f"成功 {self.ok} 个 / 失败 {self.failed} 个")
         elif kind == 'error':
@@ -172,6 +174,9 @@ class ProgressWindow:
             self.status_var.set('没有可解压的文件')
         elif self.failed:
             self.status_var.set(f"完成, 共 {self.total} 个")
+        elif self.kept_no_recycle_bin:
+            self.status_var.set(f"完成, 共 {self.total} 个; {self.kept_no_recycle_bin} 个源文件"
+                                f"所在位置没有回收站, 未删除")
         else:
             self.status_var.set(f"全部完成, 共 {self.total} 个")
             if not self.auto_close_id:
