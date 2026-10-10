@@ -132,9 +132,7 @@ def remove_all(root=CLASSES_ROOT):
 
 
 def sync_on_startup(context_menu):
-    """打包版每次启动时调用:程序文件夹被挪走后自动改写右键命令路径。"""
-    if not getattr(sys, 'frozen', False):
-        return False
+    """每次启动时调用:按配置注册,程序文件夹被挪走后自动改写右键命令路径。"""
     try:
         return apply(context_menu)
     except OSError:
