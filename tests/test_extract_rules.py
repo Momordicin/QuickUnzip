@@ -236,6 +236,44 @@ class EarlyStopAndRobustnessTests(RulesTestCase):
         self.assertIsNone(r.log_file)
 
 
+class LongPathAndDashPasswordTests(RulesTestCase):
+    def test_deep_archive_extracts_and_work_dir_is_cleaned(self):
+        import zipfile
+        z = os.path.join(self.src, 'deep.zip')
+        with zipfile.ZipFile(z, 'w') as zf:
+            zf.writestr('/'.join(['d' * 60] * 4) + '/file.txt', b'x')
+        r = self.run_unified(z)
+        self.assertEqual(r.failed, 0, r.failures)
+        self.assertFalse(os.path.exists(os.path.join(self.out, core.WORK_DIR_NAME)))
+
+    def test_path_too_long_errors_are_named(self):
+        long_name = 'C:\\' + 'd' * 300
+        e206 = OSError(0, 'x', 'C:\\short')
+        e206.winerror = core.ERROR_FILENAME_EXCED_RANGE
+        e3 = FileNotFoundError(2, 'x', long_name)
+        e3.winerror = core.ERROR_PATH_NOT_FOUND
+        e3_short = FileNotFoundError(2, 'x', 'C:\\short')
+        e3_short.winerror = core.ERROR_PATH_NOT_FOUND
+        self.assertEqual(core._describe_failure(e206, 'a.zip')[0], core.REASON_PATH_TOO_LONG)
+        self.assertEqual(core._describe_failure(e3, 'a.zip')[0], core.REASON_PATH_TOO_LONG)
+        self.assertNotEqual(core._describe_failure(e3_short, 'a.zip')[0], core.REASON_PATH_TOO_LONG)
+
+    @unittest.skipUnless(os.name == 'nt', 'Windows only')
+    def test_extended_prefix(self):
+        self.assertEqual(core._extended('C:/a/b'), '\\\\?\\C:\\a\\b')
+        self.assertEqual(core._extended('\\\\nas\\share\\x'), '\\\\?\\UNC\\nas\\share\\x')
+        self.assertEqual(core._extended('\\\\?\\C:\\a'), '\\\\?\\C:\\a')
+
+    def test_dash_password_goes_to_7z_for_rar(self):
+        p = os.path.join(self.src, 'x.rar')
+        with open(p, 'wb') as f:
+            f.write(stored_rar('hello.txt', b'hello\n'))
+        r = self.run_unified(p, passwords=['-'])
+        self.assertEqual(r.failed, 0, r.failures)
+        self.assertEqual(self.calls[0], '7z.exe')
+        self.assertIn('-p-', self.cmds[0])
+
+
 class WorkDirTests(RulesTestCase):
     def test_stale_dirs_cleaned_live_ones_kept(self):
         import subprocess as sp

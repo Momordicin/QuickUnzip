@@ -652,6 +652,27 @@ class MainWindow:
             self.stop()
 
 
+def warn_shared_folder(root, cfg):
+    """程序文件夹里混有其他文件时提醒一次:QuickUnzip 应单独放一个文件夹,卸载时只删程序自己的文件。"""
+    if cfg.data['warned_shared_folder']:
+        return
+    others = uninstall.foreign_entries()
+    if not others:
+        return
+    cfg.data['warned_shared_folder'] = True
+    try:
+        cfg.save()
+    except OSError:
+        pass
+    shown = '\n'.join(f"  {n}" for n in others[:8]) + ('\n  …' if len(others) > 8 else '')
+    messagebox.showwarning(
+        APP_TITLE,
+        f"QuickUnzip 所在的文件夹里还有其他文件:\n{shown}\n\n"
+        f"请把 QuickUnzip 单独放在一个文件夹里(直接解压发布包会自动生成 QuickUnzip 文件夹)。\n"
+        f"卸载时只会删除程序自己的文件, 上面这些不会被删除。",
+        parent=root)
+
+
 def run(initial_inputs=()):
     """创建并运行主窗口;已有主窗口在运行时把 initial_inputs 交给它后直接返回。"""
     inbox = queue.Queue()
@@ -669,7 +690,10 @@ def run(initial_inputs=()):
             root.destroy()
             return
         shell_menu.sync_on_startup(cfg.context_menu)
+        core.consolidate_log()
         MainWindow(root, cfg, initial_inputs, inbox)
+        if uninstall.is_frozen():
+            root.after(300, warn_shared_folder, root, cfg)
         root.mainloop()
     finally:
         server.close()

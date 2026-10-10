@@ -77,7 +77,10 @@ class SplitBatchTests(unittest.TestCase):
                 pass
         dirs = [d for d in os.listdir(self.src) if os.path.isdir(os.path.join(self.src, d))]
         self.assertEqual(dirs, ['big'])
-        self.assertFalse(os.path.exists(paths.FAIL_LOG_FILE))
+        with open(paths.FAIL_LOG_FILE, encoding='utf-8') as f:
+            lines = f.read().splitlines()
+        self.assertEqual(len(lines), 1)
+        self.assertTrue(lines[0].endswith('[本次] 成功 1 个 / 失败 0 个'))
 
 
 if __name__ == '__main__':

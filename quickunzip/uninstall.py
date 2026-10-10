@@ -9,11 +9,17 @@ import subprocess
 import sys
 import tempfile
 
-from . import paths, shell_menu
+from . import core, paths, shell_menu
 
 PASSWORD_FILE_NAME = 'QuickUnzip密码本.txt'
 PROGRAM_FILES = ('QuickUnzip.exe', '_internal', 'config.json', 'README.md', 'LICENSE')
-CONFIG_TEMP_RE = re.compile(r'^config\..+\.tmp$')
+KEPT_NAMES = ('待解压', '已解压', paths.FAIL_LOG_NAME, core.WORK_DIR_NAME)
+TEMP_RE = re.compile(r'^(config|faillog)\..+\.tmp$')
+SIGNATURES = {
+    'config.json': ('"passwords"', '"post_process"'),
+    'README.md': ('QuickUnzip',),
+    'LICENSE': ('MIT License', 'Momordicin'),
+}
 
 
 def is_frozen():
@@ -35,15 +41,41 @@ def remove_registry():
     return shell_menu.remove_all()
 
 
+def _is_ours(path):
+    """同名文件要看内容: config.json / README.md / LICENSE 里有本程序的特征才算。"""
+    name = os.path.basename(path)
+    if name not in SIGNATURES:
+        return os.path.exists(path)
+    try:
+        with open(path, encoding='utf-8', errors='replace') as f:
+            text = f.read(200000)
+    except OSError:
+        return False
+    return all(mark in text for mark in SIGNATURES[name])
+
+
+def _listdir(app_dir):
+    try:
+        return os.listdir(app_dir)
+    except OSError:
+        return []
+
+
 def delete_targets(app_dir=None):
+    """卸载要删除的路径:程序文件(同名文件核对内容)和本程序留下的临时文件。"""
     app_dir = app_dir or paths.APP_DIR
     targets = [os.path.join(app_dir, name) for name in PROGRAM_FILES
-               if os.path.exists(os.path.join(app_dir, name))]
-    try:
-        names = os.listdir(app_dir)
-    except OSError:
-        names = []
-    return targets + [os.path.join(app_dir, n) for n in names if CONFIG_TEMP_RE.match(n)]
+               if _is_ours(os.path.join(app_dir, name))]
+    return targets + [os.path.join(app_dir, n) for n in _listdir(app_dir) if TEMP_RE.match(n)]
+
+
+def foreign_entries(app_dir=None):
+    """程序文件夹里不属于本程序的文件 / 文件夹名;程序应当放在单独的文件夹里。"""
+    app_dir = app_dir or paths.APP_DIR
+    own = set(PROGRAM_FILES) | set(KEPT_NAMES)
+    return sorted(n for n in _listdir(app_dir)
+                  if not TEMP_RE.match(n)
+                  and not (n in own and _is_ours(os.path.join(app_dir, n))))
 
 
 def _ps_quote(text):

@@ -247,6 +247,45 @@ class StopAndProgressTests(CoreTestCase):
         self.assertEqual(events[-1], (1, 3, None))
 
 
+class FailLogTests(unittest.TestCase):
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.log = os.path.join(self._tmp.name, 'fail.log')
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def lines(self):
+        with open(self.log, encoding='utf-8') as f:
+            return f.read().splitlines()
+
+    def test_run_writes_details_and_summary(self):
+        self.assertIsNone(core.write_failure_log([], self.log, succeeded=2, failed=0))
+        self.assertEqual(core.write_failure_log([('坏了', 'a.zip'), ('坏了', 'b.zip')], self.log,
+                                                succeeded=1, failed=2), self.log)
+        lines = self.lines()
+        self.assertTrue(lines[0].endswith('[本次] 成功 2 个 / 失败 0 个'))
+        self.assertTrue(lines[1].endswith('[坏了] a.zip | b.zip'))
+        self.assertTrue(lines[2].endswith('[本次] 成功 1 个 / 失败 2 个'))
+
+    def test_consolidate_sums_everything_into_one_line(self):
+        with open(self.log, 'w', encoding='utf-8') as f:
+            f.write('2026-10-01 10:00:00 [密码错误] old1.zip | old2.zip\n'
+                    '2026-10-02 10:00:00 [累计] 解压成功 10 个 / 解压失败 3 个\n'
+                    '2026-10-09 10:00:00 [坏了] a.zip\n'
+                    '2026-10-09 10:00:00 [本次] 成功 5 个 / 失败 1 个\n'
+                    '2026-10-10 08:00:00 [本次] 成功 2 个 / 失败 0 个\n')
+        self.assertTrue(core.consolidate_log(self.log))
+        lines = self.lines()
+        self.assertEqual(len(lines), 1)
+        self.assertTrue(lines[0].endswith('[累计] 解压成功 17 个 / 解压失败 4 个'), lines[0])
+        self.assertFalse(core.consolidate_log(self.log))
+        self.assertEqual(os.listdir(self._tmp.name), ['fail.log'])
+
+    def test_consolidate_missing_log(self):
+        self.assertFalse(core.consolidate_log(self.log))
+
+
 class TrashTests(unittest.TestCase):
     @unittest.skipUnless(os.name == 'nt', 'Windows only')
     def test_send_to_trash_removes_file(self):

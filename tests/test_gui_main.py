@@ -76,6 +76,28 @@ class ResolveOutputTests(unittest.TestCase):
             self.assertIsNone(gui_main.resolve_output(text), text)
 
 
+class SharedFolderWarningTests(unittest.TestCase):
+    def test_warns_only_once(self):
+        shown = []
+        saved = (gui_main.messagebox.showwarning, gui_main.uninstall.foreign_entries)
+        self.addCleanup(setattr, gui_main.messagebox, 'showwarning', saved[0])
+        self.addCleanup(setattr, gui_main.uninstall, 'foreign_entries', saved[1])
+        gui_main.messagebox.showwarning = lambda *a, **k: shown.append(a[1])
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, 'config.json')
+            cfg = Config.load(path, example_files=[])
+            gui_main.uninstall.foreign_entries = lambda: []
+            gui_main.warn_shared_folder(None, cfg)
+            self.assertEqual(shown, [])
+            self.assertFalse(Config.load(path, []).data['warned_shared_folder'])
+            gui_main.uninstall.foreign_entries = lambda: ['notes.docx']
+            gui_main.warn_shared_folder(None, cfg)
+            gui_main.warn_shared_folder(None, Config.load(path, []))
+            self.assertEqual(len(shown), 1)
+            self.assertIn('notes.docx', shown[0])
+            self.assertTrue(Config.load(path, []).data['warned_shared_folder'])
+
+
 class SettingsBadConfigTests(unittest.TestCase):
     def test_no_empty_window_on_config_error(self):
         import tkinter as tk

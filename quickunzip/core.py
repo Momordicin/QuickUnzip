@@ -9,6 +9,7 @@ import re
 import shutil
 import secrets
 import subprocess
+import tempfile
 import time
 
 from . import paths
@@ -59,6 +60,23 @@ REASON_MISSING_VOLUME = '分卷不全(请把所有分卷放在同一文件夹)'
 REASON_TRUNCATED = '文件不完整(下载未完成或被截断)'
 REASON_CORRUPT = '压缩包损坏(CRC 或数据错误)'
 REASON_UNSUPPORTED = '无法识别的格式或解压失败'
+REASON_PATH_TOO_LONG = '路径过长(超过 260 个字符; 请把输出文件夹放浅一些, 或开启 Windows 长路径支持)'
+
+
+def _extended(path):
+    r"""加 \\?\ 前缀,让删除临时目录不受 260 字符限制。"""
+    if os.name != 'nt':
+        return path
+    path = os.path.abspath(path)
+    if path.startswith('\\\\?\\'):
+        return path
+    if path.startswith('\\\\'):
+        return '\\\\?\\UNC\\' + path[2:]
+    return '\\\\?\\' + path
+
+
+def _rmtree(path):
+    shutil.rmtree(_extended(path), ignore_errors=True)
 
 
 def _noop(*_args, **_kwargs):
@@ -148,7 +166,12 @@ def extract_with_7z(file_path, output_path, password):
 
 
 def extract_with_unrar(file_path, output_path, password):
-    """调 UnRAR.exe 解压。返回 'ok' | 'bad_password' | 'incomplete' | 'corrupt' | 'not_archive' | 'fail'。"""
+    """调 UnRAR.exe 解压。返回 'ok' | 'bad_password' | 'incomplete' | 'corrupt' | 'not_archive' | 'fail'。
+
+    UnRAR 的 '-p-' 表示"不用密码",无法传入恰好是 '-' 的密码,这一次改由 7z 尝试。
+    """
+    if password == '-':
+        return extract_with_7z(file_path, output_path, password)
     pw_arg = f'-p{password}' if password else '-p-'
     out = output_path
     # UnRAR 要求输出路径必须以分隔符结尾,否则它会把路径当成单个目标文件名而非目录。
@@ -225,13 +248,13 @@ def _rar_alias(file_path, work_dir):
         except OSError:
             shutil.copyfile(file_path, alias)
     except OSError:
-        shutil.rmtree(alias_dir, ignore_errors=True)
+        _rmtree(alias_dir)
         yield file_path
         return
     try:
         yield alias
     finally:
-        shutil.rmtree(alias_dir, ignore_errors=True)
+        _rmtree(alias_dir)
 
 
 def _try_passwords(extractor, file_path, output_path, passwords):
@@ -250,7 +273,7 @@ def _clear_dir(folder):
     for entry in os.listdir(folder):
         full = os.path.join(folder, entry)
         if os.path.isdir(full) and not os.path.islink(full):
-            shutil.rmtree(full, ignore_errors=True)
+            _rmtree(full)
         else:
             try:
                 os.remove(full)
@@ -677,11 +700,11 @@ def clean_stale_work(output_dir):
         m = RUN_DIR_RE.match(name)
         if m and (int(m.group(1)) == os.getpid() or _pid_alive(int(m.group(1)))):
             continue
-        shutil.rmtree(os.path.join(root, name), ignore_errors=True)
+        _rmtree(os.path.join(root, name))
 
 
 def _remove_work_root(work_root):
-    shutil.rmtree(work_root, ignore_errors=True)
+    _rmtree(work_root)
     try:
         os.rmdir(os.path.dirname(work_root))
     except OSError:
@@ -713,18 +736,44 @@ class RunResult:
         self.failures.append((reason, name))
 
 
+ERROR_PATH_NOT_FOUND = 3
+ERROR_FILENAME_EXCED_RANGE = 206
+LONG_PATH = 248
+
+
+def _is_path_too_long(e):
+    """系统未开长路径支持时,超长路径报 206,或报"找不到路径"(3) 且路径本身已超长。"""
+    winerror = getattr(e, 'winerror', None)
+    if winerror == ERROR_FILENAME_EXCED_RANGE:
+        return True
+    names = (getattr(e, 'filename', None), getattr(e, 'filename2', None))
+    return winerror == ERROR_PATH_NOT_FOUND and any(len(n or '') >= LONG_PATH for n in names)
+
+
 def _describe_failure(e, name):
     """异常 → (用于分组的失败原因, 带补充说明的显示名)。"""
     if isinstance(e, ExtractError):
         if e.detail:
             name = f"{name}({e.detail})"
         return e.reason, name
+    if isinstance(e, OSError) and _is_path_too_long(e):
+        return REASON_PATH_TOO_LONG, name
     return f'其他错误({type(e).__name__}: {e})', name
 
 
-def write_failure_log(failures, log_file=None):
-    """把失败明细追加写入失败日志:每种原因一行,行首带时间戳。返回日志路径。"""
-    if not failures:
+# 失败日志的行格式:
+#   2026-10-10 14:30:05 [失败原因] a.7z | b.zip → inner.7z     每次运行每种原因一行
+#   2026-10-10 14:30:05 [本次] 成功 3 个 / 失败 2 个           每次运行一行
+#   2026-10-10 09:00:00 [累计] 解压成功 120 个 / 解压失败 7 个   启动时把以往记录整理成这一行
+LOG_TOTAL_RE = re.compile(r'^\S+ \S+ \[(本次|累计)\] (?:解压)?成功 (\d+) 个 / (?:解压)?失败 (\d+) 个\s*$')
+
+
+def write_failure_log(failures, log_file=None, succeeded=0, failed=0):
+    """追加本次运行的失败明细(每种原因一行)和一行"本次 成功 / 失败"。
+
+    返回日志路径;没有失败或写入失败时返回 None。
+    """
+    if not failures and not (succeeded or failed):
         return None
     log_file = log_file or paths.FAIL_LOG_FILE
     grouped = {}
@@ -735,9 +784,49 @@ def write_failure_log(failures, log_file=None):
         with open(log_file, 'a', encoding='utf-8') as f:
             for reason, names in grouped.items():
                 f.write(f"{stamp} [{reason}] {' | '.join(names)}\n")
+            if succeeded or failed:
+                f.write(f"{stamp} [本次] 成功 {succeeded} 个 / 失败 {failed} 个\n")
     except OSError:
         return None
-    return log_file
+    return log_file if failures else None
+
+
+def consolidate_log(log_file=None):
+    """程序启动时调用:把日志里已有的记录整理成一行累计的解压成功 / 失败个数,明细不再保留。
+
+    已经只剩一行累计时不改动文件。
+    """
+    log_file = log_file or paths.FAIL_LOG_FILE
+    try:
+        with open(log_file, encoding='utf-8') as f:
+            lines = [line.rstrip('\n') for line in f if line.strip()]
+    except OSError:
+        return False
+    if not lines or (len(lines) == 1 and '[累计]' in lines[0]):
+        return False
+    ok = failed = 0
+    for line in lines:
+        m = LOG_TOTAL_RE.match(line)
+        if m:
+            ok += int(m.group(2))
+            failed += int(m.group(3))
+    stamp = time.strftime('%Y-%m-%d %H:%M:%S')
+    folder = os.path.dirname(os.path.abspath(log_file))
+    try:
+        fd, tmp = tempfile.mkstemp(dir=folder, prefix='faillog.', suffix='.tmp')
+    except OSError:
+        return False
+    try:
+        with os.fdopen(fd, 'w', encoding='utf-8') as f:
+            f.write(f"{stamp} [累计] 解压成功 {ok} 个 / 解压失败 {failed} 个\n")
+        os.replace(tmp, log_file)
+    except OSError:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+        return False
+    return True
 
 
 # ============================================================
@@ -965,7 +1054,8 @@ class Extractor:
                 result.purged += purge_garbage(p, self.garbage_names, self.log)
             if self.rename:
                 result.renamed += rename_leaf_files(p, self.log)
-        result.log_file = write_failure_log(result.failures, self.fail_log)
+        result.log_file = write_failure_log(result.failures, self.fail_log,
+                                            result.succeeded, result.failed)
         self.on_progress(done, result.total, None, result)
         return result
 
@@ -985,7 +1075,7 @@ class Extractor:
             result.add_failure(reason, shown)
         finally:
             if rd:
-                shutil.rmtree(rd, ignore_errors=True)
+                _rmtree(rd)
 
         if len(result.failures) > failures_before:
             result.failed += 1
@@ -1058,7 +1148,7 @@ class Extractor:
                 if not getattr(e, 'not_archive', False):
                     reason, shown = _describe_failure(e, item_label)
                     result.add_failure(reason, shown)
-                shutil.rmtree(new_rd, ignore_errors=True)
+                _rmtree(new_rd)
                 continue
             consumed.update(_path_key(p) for p in source_files(item))
             # 命名优先级:该层 archive 自身 stem > rd 中最深目录名 > 父级传下来的 last_name。
@@ -1067,7 +1157,7 @@ class Extractor:
             sub_last_name = item_stem or deepest_in_rd or last_name
             self._process_random_dir(new_rd, output_dir, work_root,
                                      sub_last_name, item_label, result)
-            shutil.rmtree(new_rd, ignore_errors=True)
+            _rmtree(new_rd)
 
         rest = [os.path.join(rd, e) for e in os.listdir(rd)
                 if _path_key(os.path.join(rd, e)) not in consumed]

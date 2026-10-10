@@ -5,5 +5,6 @@ build/
 dist/
 解压失败日志.txt
 config.*.tmp
+faillog.*.tmp
 __pycache__/
 docs/

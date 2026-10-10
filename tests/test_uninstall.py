@@ -24,12 +24,21 @@ class ExportTests(unittest.TestCase):
 
 @unittest.skipUnless(os.name == 'nt', 'Windows only')
 class SelfDeleteTests(unittest.TestCase):
-    def make_app(self, root):
+    OURS = {
+        'config.json': '{"passwords": [], "post_process": {}}',
+        'README.md': '# QuickUnzip',
+        'LICENSE': 'MIT License\nCopyright (c) 2026 Momordicin',
+    }
+
+    def make_app(self, root, contents=None):
         app = os.path.join(root, "Quick'Unzip 程序")
         os.makedirs(os.path.join(app, '_internal', 'sub'))
-        for name in ('QuickUnzip.exe', 'config.json', 'README.md', 'LICENSE', 'config.ab12.tmp',
+        for name in ('QuickUnzip.exe', 'config.ab12.tmp', 'faillog.cd34.tmp',
                      paths.FAIL_LOG_NAME, os.path.join('_internal', 'sub', 'x.dll')):
             open(os.path.join(app, name), 'w').close()
+        for name, text in (contents or self.OURS).items():
+            with open(os.path.join(app, name), 'w', encoding='utf-8') as f:
+                f.write(text)
         os.makedirs(os.path.join(app, '待解压'))
         os.makedirs(os.path.join(app, '已解压', 'done'))
         return app
@@ -54,6 +63,21 @@ class SelfDeleteTests(unittest.TestCase):
             self.assertEqual(sorted(os.listdir(app)), sorted(['待解压', '已解压', paths.FAIL_LOG_NAME]))
             self.assertTrue(os.path.isdir(os.path.join(app, '已解压', 'done')))
             self.assertFalse(os.path.exists(script))
+
+    def test_same_named_files_of_others_are_kept(self):
+        with tempfile.TemporaryDirectory() as root:
+            app = self.make_app(root, {'config.json': '{"theme": "dark"}',
+                                       'README.md': '# Some other tool',
+                                       'LICENSE': 'Apache License'})
+            open(os.path.join(app, 'notes.docx'), 'w').close()
+            names = sorted(os.path.basename(t) for t in uninstall.delete_targets(app))
+            self.assertEqual(names, ['QuickUnzip.exe', '_internal', 'config.ab12.tmp', 'faillog.cd34.tmp'])
+            self.assertEqual(uninstall.foreign_entries(app),
+                             ['LICENSE', 'README.md', 'config.json', 'notes.docx'])
+
+    def test_dedicated_folder_has_no_foreign_entries(self):
+        with tempfile.TemporaryDirectory() as root:
+            self.assertEqual(uninstall.foreign_entries(self.make_app(root)), [])
 
     def test_removes_folder_when_nothing_left(self):
         with tempfile.TemporaryDirectory() as root:

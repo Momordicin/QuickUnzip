@@ -21,6 +21,7 @@ DEFAULT_CONFIG = {
     "last_extract_path": "",
     "context_menu": {"file": True, "folder": True, "background": True},
     "post_process": {"purge_garbage": True, "rename": True, "delete_source": False},
+    "warned_shared_folder": False,
 }
 
 # 旧版(单个 file_path → extract_path)字段;读到时转成第一条 history 后删除

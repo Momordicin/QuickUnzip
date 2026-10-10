@@ -234,6 +234,7 @@ def run(initial_paths):
             shell_menu.sync_on_startup(Config.load().context_menu)
         except UserError:
             pass
+        core.consolidate_log()
         ProgressWindow(root, server, inbox, [p for p in initial_paths if os.path.exists(p)])
         root.mainloop()
     finally:
