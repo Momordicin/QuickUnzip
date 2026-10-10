@@ -1,7 +1,7 @@
 # quickunzip/gui_main.py — 主窗口：拖入或选择文件 / 文件夹、历史下拉、输出路径、开始 / 停止、一行进度与结果
 #
 # 用法：from quickunzip import gui_main；gui_main.run()
-# 配套文件：quickunzip/dnd.py / quickunzip/core.py / quickunzip/config.py / quickunzip/paths.py / jieya.py
+# 配套文件：quickunzip/gui_settings.py / quickunzip/dnd.py / quickunzip/core.py / quickunzip/config.py / quickunzip/paths.py / jieya.py
 
 import os
 import queue
@@ -11,6 +11,7 @@ from tkinter import filedialog, messagebox, ttk
 
 from . import core, dnd, paths
 from .config import Config, UserError, norm_path
+from .gui_settings import SettingsWindow
 
 APP_TITLE = 'QuickUnzip'
 HINT = '把文件或文件夹拖到这里\n或点击下方"选择文件" / "选择文件夹"'
@@ -173,13 +174,14 @@ class MainWindow:
     def _build_menu(self):
         menubar = tk.Menu(self.root)
         menu = tk.Menu(menubar, tearoff=False)
-        menu.add_command(label='设置…(下一版本)', state='disabled')
+        menu.add_command(label='设置…', command=self.open_settings)
         menu.add_command(label='卸载…(下一版本)', state='disabled')
         menu.add_separator()
         menu.add_command(label='关于', command=self.show_about)
         menu.add_command(label='退出', command=self.on_close)
         menubar.add_cascade(label='菜单', menu=menu)
         self.root.config(menu=menubar)
+        self.menu = menu
 
     def _build_body(self):
         body = ttk.Frame(self.root, padding=12)
@@ -382,6 +384,7 @@ class MainWindow:
         self.listbox.configure(state='disabled' if busy else 'normal')
         self.btn_start.state(['disabled'] if busy else ['!disabled'])
         self.btn_stop.state(['!disabled'] if busy else ['disabled'])
+        self.menu.entryconfigure(0, state='disabled' if busy else 'normal')
 
     def _clear_result(self):
         self.status_var.set('就绪')
@@ -506,6 +509,18 @@ class MainWindow:
             self.link_output.pack(side='left', padx=(12, 0))
 
     # ---------- 其他 ----------
+
+    def open_settings(self):
+        if self.busy:
+            return
+        try:
+            SettingsWindow(self.root, on_saved=self._settings_saved)
+        except UserError as e:
+            messagebox.showerror(APP_TITLE, str(e))
+
+    def _settings_saved(self):
+        self.cfg = Config.load()
+        self._suggest_output()
 
     def show_about(self):
         messagebox.showinfo(APP_TITLE, 'QuickUnzip\n批量递归解压 · 密码库 · 垃圾清理 · 重命名\n\n'
